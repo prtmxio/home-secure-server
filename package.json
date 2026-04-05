@@ -1,0 +1,42 @@
+{
+  "name": "glazia-home-secure-server",
+  "version": "1.0.0",
+  "description": "Backend for Glazia Home Secure with MongoDB, auth, hub pairing, sensor pairing and notifications",
+  "main": "dist/src/server.js",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test test/server.test.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "mongodb-memory-server": "^11.0.1",
+    "mongoose": "^9.3.2",
+    "supertest": "^7.2.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.5.0",
+    "@types/supertest": "^7.2.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^24.6.0",
+    "@types/supertest": "^6.0.3",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}
