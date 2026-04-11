@@ -6,8 +6,8 @@ export class DeviceController {
   constructor(private readonly deviceService: DeviceService) {}
 
   registerHubOverWifi = asyncHandler(async (req: Request, res: Response) => {
-    const home = await this.deviceService.registerHubOverWifi(req.body);
-    res.status(201).json({ home });
+    const { home, hubSecret } = await this.deviceService.registerHubOverWifi(req.body);
+    res.status(201).json({ home, hubSecret });
   });
 
   openSensorPairingMode = asyncHandler(async (req: Request, res: Response) => {

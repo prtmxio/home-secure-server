@@ -60,7 +60,7 @@ export class HomeService {
     };
   }
 
-  async completeHubRegistration(payload: CompleteHubRegistrationInput): Promise<HomeDto> {
+  async completeHubRegistration(payload: CompleteHubRegistrationInput): Promise<{ home: HomeDto; hubSecret: string }> {
     const hubMacAddress = normalizeMacAddress(payload.hubMacAddress);
     const provisioningToken = String(payload.provisioningToken || "").trim();
 
@@ -137,7 +137,10 @@ export class HomeService {
       },
     });
 
-    return this.getHomeById(session.user, home.id);
+    return {
+      home: await this.getHomeById(session.user, home.id),
+      hubSecret: hub.deviceSecret,
+    };
   }
 
   async listHomes(userId: string | Types.ObjectId): Promise<HomeDto[]> {
