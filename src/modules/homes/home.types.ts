@@ -32,6 +32,7 @@ export interface SensorDto {
   provisioning: {
     hubMacAddress: string;
     sensorMacAddress: string;
+    provisionKey: string | null;   // present only once (cleared after hub fetches it)
     sharedAt: Date;
   };
   createdAt: Date;

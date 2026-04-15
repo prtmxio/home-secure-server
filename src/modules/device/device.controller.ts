@@ -18,6 +18,14 @@ export class DeviceController {
     res.status(201).json({ sensorPairingSession: session });
   });
 
+  fetchPendingSensorPairing = asyncHandler(async (req: Request, res: Response) => {
+    const result = await this.deviceService.fetchPendingSensorPairing({
+      hubMacAddress: (req.headers["x-hub-mac-address"] || "") as string,
+      hubSecret: (req.headers["x-hub-secret"] || "") as string,
+    });
+    res.status(200).json(result);
+  });
+
   ingestHubEvent = asyncHandler(async (req: Request, res: Response) => {
     const result = await this.deviceService.ingestHubEvent({
       ...req.body,

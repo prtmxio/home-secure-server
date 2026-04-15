@@ -206,16 +206,6 @@ export class HomeService {
     }
 
     const hub = home.hub as unknown as IHub & { _id: Types.ObjectId; id: string };
-    const session = await SensorPairingSessionModel.findOne({
-      home: home._id,
-      hub: hub._id,
-      status: "active",
-      expiresAt: { $gt: new Date() },
-    });
-
-    if (!session) {
-      throw new ApiError(400, "Hub sensor pairing mode is not active");
-    }
 
     const sensorMacAddress = normalizeMacAddress(payload.sensorMacAddress);
     const existingSensor = await SensorModel.findOne({ macAddress: sensorMacAddress });
@@ -228,6 +218,14 @@ export class HomeService {
     sensor.type = payload.type || sensor.type || "contact";
     sensor.zone = payload.zone || sensor.zone || "";
     sensor.hardwareModel = payload.hardwareModel || sensor.hardwareModel || "ESP32-C3 Mini";
+
+    // Generate a 16-byte provision key (= ESP-NOW LMK).
+    // Returned to the phone so it can push the key to the sensor over BLE.
+    // Cleared on the server once the hub has fetched it (one-time delivery).
+    const provisionKey = crypto.randomBytes(16).toString("hex");
+    sensor.provisionKey = provisionKey;
+    sensor.status = "provisioning";
+
     sensor.provisioning = {
       hubMacAddress: hub.macAddress,
       sensorMacAddress,
@@ -235,10 +233,6 @@ export class HomeService {
     };
     sensor.status = "paired";
     await sensor.save();
-
-    session.status = "completed";
-    session.completedAt = new Date();
-    await session.save();
 
     await ActivityLogModel.create({
       user: new Types.ObjectId(String(userId)),
@@ -311,7 +305,12 @@ export class HomeService {
       hardwareModel: sensor.hardwareModel,
       status: sensor.status,
       lastActivityAt: sensor.lastActivityAt,
-      provisioning: sensor.provisioning,
+      provisioning: {
+        hubMacAddress: sensor.provisioning.hubMacAddress,
+        sensorMacAddress: sensor.provisioning.sensorMacAddress,
+        provisionKey: sensor.provisionKey ?? null,
+        sharedAt: sensor.provisioning.sharedAt,
+      },
       createdAt: sensor.createdAt,
       updatedAt: sensor.updatedAt,
     };
