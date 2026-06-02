@@ -21,14 +21,19 @@ import {
 export class HomeService {
   constructor(private readonly config: AppConfig) {}
 
-  async startHubSetup(userId: string | Types.ObjectId, payload: StartHomeSetupInput) {
+  async startHubSetup(
+    userId: string | Types.ObjectId,
+    payload: StartHomeSetupInput,
+  ) {
     if (!payload.homeName) {
       throw new ApiError(400, "homeName is required");
     }
 
     const hubMacAddress = normalizeMacAddress(payload.hubMacAddress);
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + this.config.pairingSessionTtlSeconds * 1000);
+    const expiresAt = new Date(
+      now.getTime() + this.config.pairingSessionTtlSeconds * 1000,
+    );
     const provisioningToken = crypto.randomBytes(24).toString("hex");
 
     await HubSetupSessionModel.updateMany(
@@ -60,7 +65,9 @@ export class HomeService {
     };
   }
 
-  async completeHubRegistration(payload: CompleteHubRegistrationInput): Promise<HomeDto> {
+  async completeHubRegistration(
+    payload: CompleteHubRegistrationInput,
+  ): Promise<{ home: HomeDto; hubSecret: string }> {
     const hubMacAddress = normalizeMacAddress(payload.hubMacAddress);
     const provisioningToken = String(payload.provisioningToken || "").trim();
 
@@ -137,16 +144,27 @@ export class HomeService {
       },
     });
 
-    return this.getHomeById(session.user, home.id);
+    return {
+      home: await this.getHomeById(session.user, home.id),
+      hubSecret: hub.deviceSecret,
+    };
   }
 
   async listHomes(userId: string | Types.ObjectId): Promise<HomeDto[]> {
-    const homes = await HomeModel.find({ owner: userId }).populate("hub").sort({ createdAt: -1 });
+    const homes = await HomeModel.find({ owner: userId })
+      .populate("hub")
+      .sort({ createdAt: -1 });
     return Promise.all(homes.map((home) => this.buildHomeDto(home)));
   }
 
-  async getHomeById(userId: string | Types.ObjectId, homeId: string): Promise<HomeDto> {
-    const home = await HomeModel.findOne({ _id: homeId, owner: userId }).populate("hub");
+  async getHomeById(
+    userId: string | Types.ObjectId,
+    homeId: string,
+  ): Promise<HomeDto> {
+    const home = await HomeModel.findOne({
+      _id: homeId,
+      owner: userId,
+    }).populate("hub");
     if (!home) {
       throw new ApiError(404, "Home not found");
     }
@@ -161,7 +179,9 @@ export class HomeService {
     }
 
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + this.config.pairingSessionTtlSeconds * 1000);
+    const expiresAt = new Date(
+      now.getTime() + this.config.pairingSessionTtlSeconds * 1000,
+    );
 
     await SensorPairingSessionModel.updateMany(
       { hub: hubId, status: "active" },
@@ -197,34 +217,54 @@ export class HomeService {
       sensor: { sensorMacAddress: string; targetHubMacAddress: string };
     };
   }> {
-    const home = await HomeModel.findOne({ _id: homeId, owner: userId }).populate("hub");
+    const home = await HomeModel.findOne({
+      _id: homeId,
+      owner: userId,
+    }).populate("hub");
     if (!home || !home.hub) {
       throw new ApiError(404, "Home not found");
     }
 
-    const hub = home.hub as unknown as IHub & { _id: Types.ObjectId; id: string };
-    const session = await SensorPairingSessionModel.findOne({
-      home: home._id,
-      hub: hub._id,
-      status: "active",
-      expiresAt: { $gt: new Date() },
-    });
-
-    if (!session) {
-      throw new ApiError(400, "Hub sensor pairing mode is not active");
-    }
+    const hub = home.hub as unknown as IHub & {
+      _id: Types.ObjectId;
+      id: string;
+    };
 
     const sensorMacAddress = normalizeMacAddress(payload.sensorMacAddress);
-    const existingSensor = await SensorModel.findOne({ macAddress: sensorMacAddress });
+    const existingSensor = await SensorModel.findOne({
+      macAddress: sensorMacAddress,
+    });
     if (existingSensor && existingSensor.hub.toString() !== hub.id) {
       throw new ApiError(409, "This sensor is already paired with another hub");
     }
 
-    const sensor = existingSensor ?? new SensorModel({ macAddress: sensorMacAddress, hub: hub._id });
-    sensor.name = payload.name || sensor.name || `Sensor ${sensorMacAddress.slice(-5)}`;
+    if (!existingSensor) {
+      const sensorCount = await SensorModel.countDocuments({ hub: hub._id });
+      if (sensorCount >= 20) {
+        throw new ApiError(
+          409,
+          "Hub has reached the maximum number of paired sensors (20)",
+        );
+      }
+    }
+
+    const sensor =
+      existingSensor ??
+      new SensorModel({ macAddress: sensorMacAddress, hub: hub._id });
+    sensor.name =
+      payload.name || sensor.name || `Sensor ${sensorMacAddress.slice(-5)}`;
     sensor.type = payload.type || sensor.type || "contact";
     sensor.zone = payload.zone || sensor.zone || "";
-    sensor.hardwareModel = payload.hardwareModel || sensor.hardwareModel || "ESP32-C3 Mini";
+    sensor.hardwareModel =
+      payload.hardwareModel || sensor.hardwareModel || "ESP32-C3 Mini";
+
+    // Generate a 16-byte provision key (= ESP-NOW LMK).
+    // Returned to the phone so it can push the key to the sensor over BLE.
+    // Cleared on the server once the hub has fetched it (one-time delivery).
+    const provisionKey = crypto.randomBytes(16).toString("hex");
+    sensor.provisionKey = provisionKey;
+    sensor.status = "provisioning";
+
     sensor.provisioning = {
       hubMacAddress: hub.macAddress,
       sensorMacAddress,
@@ -232,10 +272,6 @@ export class HomeService {
     };
     sensor.status = "paired";
     await sensor.save();
-
-    session.status = "completed";
-    session.completedAt = new Date();
-    await session.save();
 
     await ActivityLogModel.create({
       user: new Types.ObjectId(String(userId)),
@@ -267,9 +303,16 @@ export class HomeService {
     };
   }
 
-  private async buildHomeDto(home: IHome & { _id?: Types.ObjectId; id?: string; hub?: unknown }): Promise<HomeDto> {
-    const hub = home.hub as unknown as IHub & { _id: Types.ObjectId; id: string };
-    const sensors = await SensorModel.find({ hub: hub._id }).sort({ createdAt: 1 }).lean();
+  private async buildHomeDto(
+    home: IHome & { _id?: Types.ObjectId; id?: string; hub?: unknown },
+  ): Promise<HomeDto> {
+    const hub = home.hub as unknown as IHub & {
+      _id: Types.ObjectId;
+      id: string;
+    };
+    const sensors = await SensorModel.find({ hub: hub._id })
+      .sort({ createdAt: 1 })
+      .lean();
 
     return {
       id: home.id || String(home._id),
@@ -282,7 +325,9 @@ export class HomeService {
     };
   }
 
-  private serializeHub(hub: IHub & { _id?: Types.ObjectId; id?: string }): HubDto {
+  private serializeHub(
+    hub: IHub & { _id?: Types.ObjectId; id?: string },
+  ): HubDto {
     return {
       id: hub.id || String(hub._id),
       name: hub.name,
@@ -297,7 +342,9 @@ export class HomeService {
     };
   }
 
-  private serializeSensor(sensor: ISensor & { _id?: Types.ObjectId; id?: string }): SensorDto {
+  private serializeSensor(
+    sensor: ISensor & { _id?: Types.ObjectId; id?: string },
+  ): SensorDto {
     return {
       id: sensor.id || String(sensor._id),
       hubId: sensor.hub.toString(),
@@ -308,7 +355,12 @@ export class HomeService {
       hardwareModel: sensor.hardwareModel,
       status: sensor.status,
       lastActivityAt: sensor.lastActivityAt,
-      provisioning: sensor.provisioning,
+      provisioning: {
+        hubMacAddress: sensor.provisioning.hubMacAddress,
+        sensorMacAddress: sensor.provisioning.sensorMacAddress,
+        provisionKey: sensor.provisionKey ?? null,
+        sharedAt: sensor.provisioning.sharedAt,
+      },
       createdAt: sensor.createdAt,
       updatedAt: sensor.updatedAt,
     };

@@ -37,6 +37,31 @@ export class DeviceService {
     return this.homeService.openSensorPairingMode(hub._id);
   }
 
+  async fetchPendingSensorPairing(payload: { hubMacAddress: string; hubSecret: string }) {
+    const hubMacAddress = normalizeMacAddress(payload.hubMacAddress);
+    const hubSecret = String(payload.hubSecret || "");
+
+    const hub = await HubModel.findOne({ macAddress: hubMacAddress });
+    if (!hub) throw new ApiError(404, "Hub not found");
+    if (hub.deviceSecret !== hubSecret) throw new ApiError(401, "Invalid hub secret");
+
+    // Find the oldest sensor for this hub that still has an undelivered provision key
+    const sensor = await SensorModel.findOne({
+      hub: hub._id,
+      provisionKey: { $ne: null },
+    }).sort({ createdAt: 1 });
+
+    if (!sensor) throw new ApiError(404, "No pending sensor pairing for this hub");
+
+    const { macAddress: sensorMacAddress, provisionKey } = sensor;
+
+    // One-time delivery — clear the key so a second fetch returns nothing
+    sensor.provisionKey = null;
+    await sensor.save();
+
+    return { sensorMacAddress, provisionKey };
+  }
+
   async ingestHubEvent(payload: DeviceEventInput): Promise<{ activityLogId: string; notification: ReturnType<NotificationService["serialize"]> }> {
     const hubMacAddress = normalizeMacAddress(payload.hubMacAddress);
     const sensorMacAddress = payload.sensorMacAddress ? normalizeMacAddress(payload.sensorMacAddress) : null;

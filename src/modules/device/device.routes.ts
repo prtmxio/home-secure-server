@@ -7,6 +7,7 @@ export function createDeviceRoutes(deviceController: DeviceController, deviceMid
   router.use(deviceMiddleware);
   router.post("/hubs/register", deviceController.registerHubOverWifi);
   router.post("/hubs/sensor-pairing-mode", deviceController.openSensorPairingMode);
+  router.get("/hubs/pending-sensor", deviceController.fetchPendingSensorPairing);
   router.post("/hubs/events", deviceController.ingestHubEvent);
 
   return router;
