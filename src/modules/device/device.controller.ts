@@ -6,8 +6,8 @@ export class DeviceController {
   constructor(private readonly deviceService: DeviceService) {}
 
   registerHubOverWifi = asyncHandler(async (req: Request, res: Response) => {
-    const home = await this.deviceService.registerHubOverWifi(req.body);
-    res.status(201).json({ home });
+    const { home, hubSecret } = await this.deviceService.registerHubOverWifi(req.body);
+    res.status(201).json({ home, hubSecret });
   });
 
   openSensorPairingMode = asyncHandler(async (req: Request, res: Response) => {
@@ -16,6 +16,14 @@ export class DeviceController {
       hubSecret: (req.headers["x-hub-secret"] || req.body.hubSecret) as string,
     });
     res.status(201).json({ sensorPairingSession: session });
+  });
+
+  fetchPendingSensorPairing = asyncHandler(async (req: Request, res: Response) => {
+    const result = await this.deviceService.fetchPendingSensorPairing({
+      hubMacAddress: (req.headers["x-hub-mac-address"] || "") as string,
+      hubSecret: (req.headers["x-hub-secret"] || "") as string,
+    });
+    res.status(200).json(result);
   });
 
   ingestHubEvent = asyncHandler(async (req: Request, res: Response) => {

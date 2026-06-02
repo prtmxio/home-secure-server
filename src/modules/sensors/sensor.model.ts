@@ -7,7 +7,8 @@ export interface ISensor {
   type: string;
   zone: string;
   hardwareModel: string;
-  status: "paired" | "offline" | "online";
+  status: "provisioning" | "paired" | "offline" | "online";
+  provisionKey: string | null;   // 32-char hex (16 bytes); cleared once hub fetches it
   provisioning: {
     hubMacAddress: string;
     sensorMacAddress: string;
@@ -26,7 +27,8 @@ const sensorSchema = new Schema<ISensor>(
     type: { type: String, required: true, trim: true },
     zone: { type: String, default: "", trim: true },
     hardwareModel: { type: String, default: "ESP32-C3 Mini" },
-    status: { type: String, enum: ["paired", "offline", "online"], default: "paired" },
+    status: { type: String, enum: ["provisioning", "paired", "offline", "online"], default: "provisioning" },
+    provisionKey: { type: String, default: null },
     provisioning: {
       hubMacAddress: { type: String, required: true },
       sensorMacAddress: { type: String, required: true },
