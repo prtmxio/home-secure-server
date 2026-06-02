@@ -6,6 +6,9 @@ export function createAuthRoutes(authController: AuthController, authMiddleware:
 
   router.post("/register", authController.register);
   router.post("/login", authController.login);
+  router.post("/otp/request", authController.requestOtp);
+  router.post("/otp/verify", authController.verifyOtp);
+  router.post("/otp/register", authController.completeOtpRegistration);
   router.get("/me", authMiddleware, authController.me);
 
   return router;

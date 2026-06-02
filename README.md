@@ -92,6 +92,14 @@ npm install
 npm start
 ```
 
+For development, run:
+
+```bash
+npm run dev
+```
+
+By default the server tries to connect to `mongodb://127.0.0.1:27017/glazia-home-secure`. If local MongoDB is not running in `NODE_ENV=development`, the server falls back to an in-memory MongoDB instance so the API can still boot. That fallback data is temporary and is deleted when the server stops.
+
 Useful scripts:
 
 - `npm run dev`

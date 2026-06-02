@@ -3,7 +3,7 @@ import { connectDatabase } from "./config/database";
 import { env } from "./config/env";
 
 async function bootstrap(): Promise<void> {
-  await connectDatabase(env.mongodbUri);
+  await connectDatabase(env.mongodbUri, { allowMemoryFallback: env.nodeEnv === "development" });
 
   const app = createApp(env);
   app.listen(env.port, () => {

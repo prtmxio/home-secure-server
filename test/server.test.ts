@@ -134,3 +134,40 @@ test("user can onboard a hub over BLE setup, pair a door sensor through the hub 
   assert.equal(notificationsResponse.body.notifications.length, 1);
   assert.equal(notificationsResponse.body.notifications[0].severity, "critical");
 });
+
+test("otp flow registers first-time users and authenticates existing users", async () => {
+  const requestOtpResponse = await request(app).post("/api/auth/otp/request").send({
+    phoneNumber: "+919999999999",
+  });
+  assert.equal(requestOtpResponse.status, 200);
+  assert.equal(requestOtpResponse.body.otp, "123456");
+
+  const firstVerifyResponse = await request(app).post("/api/auth/otp/verify").send({
+    phoneNumber: "+919999999999",
+    otp: "123456",
+  });
+  assert.equal(firstVerifyResponse.status, 200);
+  assert.equal(firstVerifyResponse.body.status, "registration_required");
+  assert.ok(firstVerifyResponse.body.otpSessionId);
+
+  const completeResponse = await request(app).post("/api/auth/otp/register").send({
+    otpSessionId: firstVerifyResponse.body.otpSessionId,
+    name: "ABC User",
+    email: "abc@gmail.com",
+    phoneNumber: "+919999999999",
+  });
+  assert.equal(completeResponse.status, 201);
+  assert.ok(completeResponse.body.token);
+  assert.equal(completeResponse.body.user.email, "abc@gmail.com");
+
+  await request(app).post("/api/auth/otp/request").send({
+    phoneNumber: "+919999999999",
+  });
+  const secondVerifyResponse = await request(app).post("/api/auth/otp/verify").send({
+    phoneNumber: "+919999999999",
+    otp: "123456",
+  });
+  assert.equal(secondVerifyResponse.status, 200);
+  assert.equal(secondVerifyResponse.body.status, "authenticated");
+  assert.ok(secondVerifyResponse.body.token);
+});
