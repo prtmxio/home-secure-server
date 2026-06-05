@@ -1,12 +1,18 @@
-import { createApp } from "./app";
+import http from "http";
+import { createApp, createRealtimeServices } from "./app";
 import { connectDatabase } from "./config/database";
 import { env } from "./config/env";
+import { attachHubControlWebSocket } from "./modules/device-control/hub-control-ws";
 
 async function bootstrap(): Promise<void> {
   await connectDatabase(env.mongodbUri);
 
-  const app = createApp(env);
-  app.listen(env.port, () => {
+  const realtimeServices = createRealtimeServices();
+  const app = createApp(env, realtimeServices);
+  const server = http.createServer(app);
+  attachHubControlWebSocket(server, env, realtimeServices.doorLockService);
+
+  server.listen(env.port, () => {
     console.log(`Glazia Home Secure server listening on port ${env.port}`);
   });
 }

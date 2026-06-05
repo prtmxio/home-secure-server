@@ -1,6 +1,8 @@
 import { Router, RequestHandler } from "express";
 import { AuthController } from "../modules/auth/auth.controller";
 import { createAuthRoutes } from "../modules/auth/auth.routes";
+import { CameraController } from "../modules/camera/camera.controller";
+import { createCameraRoutes } from "../modules/camera/camera.routes";
 import { DeviceController } from "../modules/device/device.controller";
 import { createDeviceRoutes } from "../modules/device/device.routes";
 import { HomeController } from "../modules/homes/home.controller";
@@ -11,6 +13,7 @@ import { createNotificationRoutes } from "../modules/notifications/notification.
 interface ApiRouterDependencies {
   controllers: {
     authController: AuthController;
+    cameraController: CameraController;
     homeController: HomeController;
     deviceController: DeviceController;
     notificationController: NotificationController;
@@ -29,6 +32,7 @@ export function createApiRouter({ controllers, middlewares }: ApiRouterDependenc
   });
 
   router.use("/auth", createAuthRoutes(controllers.authController, middlewares.authMiddleware));
+  router.use("/camera", createCameraRoutes(controllers.cameraController));
   router.use("/homes", createHomeRoutes(controllers.homeController, middlewares.authMiddleware));
   router.use("/device", createDeviceRoutes(controllers.deviceController, middlewares.deviceMiddleware));
   router.use(

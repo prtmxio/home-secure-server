@@ -7,24 +7,41 @@ import { notFoundMiddleware } from "./common/middlewares/not-found.middleware";
 import { createApiRouter } from "./routes";
 import { AuthController } from "./modules/auth/auth.controller";
 import { AuthService } from "./modules/auth/auth.service";
+import { CameraController } from "./modules/camera/camera.controller";
+import { CameraRelay } from "./modules/camera/camera-relay";
 import { DeviceController } from "./modules/device/device.controller";
 import { DeviceService } from "./modules/device/device.service";
+import { DoorLockService } from "./modules/door-lock/door-lock.service";
 import { HomeController } from "./modules/homes/home.controller";
 import { HomeService } from "./modules/homes/home.service";
 import { NotificationController } from "./modules/notifications/notification.controller";
 import { NotificationService } from "./modules/notifications/notification.service";
 
-export function createApp(config: AppConfig = env): Express {
+export interface RealtimeServices {
+  cameraRelay: CameraRelay;
+  doorLockService: DoorLockService;
+}
+
+export function createRealtimeServices(): RealtimeServices {
+  return {
+    cameraRelay: new CameraRelay(),
+    doorLockService: new DoorLockService(),
+  };
+}
+
+export function createApp(config: AppConfig = env, realtimeServices: RealtimeServices = createRealtimeServices()): Express {
   const app = express();
 
+  const { cameraRelay, doorLockService } = realtimeServices;
   const authService = new AuthService(config);
   const homeService = new HomeService(config);
   const notificationService = new NotificationService();
-  const deviceService = new DeviceService(notificationService, homeService);
+  const deviceService = new DeviceService(notificationService, homeService, cameraRelay);
 
   const authController = new AuthController(authService, homeService);
-  const homeController = new HomeController(homeService);
+  const homeController = new HomeController(homeService, doorLockService, cameraRelay);
   const deviceController = new DeviceController(deviceService);
+  const cameraController = new CameraController(cameraRelay);
   const notificationController = new NotificationController(notificationService);
 
   const authMiddleware = createAuthMiddleware(config);
@@ -38,6 +55,7 @@ export function createApp(config: AppConfig = env): Express {
     createApiRouter({
       controllers: {
         authController,
+        cameraController,
         homeController,
         deviceController,
         notificationController,
