@@ -48,7 +48,7 @@ export class HomeController {
 
   streamCamera = asyncHandler(async (req: Request, res: Response) => {
     const home = await this.homeService.getHomeById(req.user!.id, req.params.homeId as string);
-    this.cameraRelay.streamHome(home.id, res);
+    await this.cameraRelay.streamHome(home.id, res);
   });
 
   createCameraStreamToken = asyncHandler(async (req: Request, res: Response) => {

@@ -211,7 +211,7 @@ test("user lock command is pushed to the hub over WebSocket and ACK updates stat
     assert.equal(command.type, "door_lock_command");
     assert.equal(command.mode, "auto_lock");
     assert.equal(command.action, "open");
-    assert.equal(command.durationMs, 5000);
+    assert.equal(command.durationMs, 3000);
 
     const ackPromise = nextWsJsonOfType(ws, "door_lock_ack_received");
     ws.send(JSON.stringify({

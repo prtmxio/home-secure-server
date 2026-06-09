@@ -8,7 +8,7 @@ import { HubModel } from "../hubs/hub.model";
 import { DoorLockCommandModel, IDoorLockCommand } from "./door-lock.model";
 import { DoorLockAckInput, DoorLockCommandDto } from "./door-lock.types";
 
-const AUTO_LOCK_DURATION_MS = 5000;
+const AUTO_LOCK_DURATION_MS = 3000;
 const MAX_TOGGLE_DURATION_MS = 10000;
 
 export class DoorLockService {

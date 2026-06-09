@@ -14,6 +14,7 @@ import { DeviceService } from "./modules/device/device.service";
 import { DoorLockService } from "./modules/door-lock/door-lock.service";
 import { HomeController } from "./modules/homes/home.controller";
 import { HomeService } from "./modules/homes/home.service";
+import { sendCameraStreamCommandForHome } from "./modules/device-control/hub-control-ws";
 import { NotificationController } from "./modules/notifications/notification.controller";
 import { NotificationService } from "./modules/notifications/notification.service";
 
@@ -24,7 +25,10 @@ export interface RealtimeServices {
 
 export function createRealtimeServices(): RealtimeServices {
   return {
-    cameraRelay: new CameraRelay(),
+    cameraRelay: new CameraRelay({
+      onFirstViewer: (homeId, streamSessionId) => sendCameraStreamCommandForHome(homeId, "start", streamSessionId),
+      onLastViewer: (homeId, streamSessionId) => sendCameraStreamCommandForHome(homeId, "stop", streamSessionId),
+    }),
     doorLockService: new DoorLockService(),
   };
 }

@@ -3,13 +3,52 @@ import { RawData, WebSocket, WebSocketServer } from "ws";
 import { AppConfig } from "../../config/env";
 import { DoorLockService } from "../door-lock/door-lock.service";
 import { DoorLockCommandDto } from "../door-lock/door-lock.types";
+import { HubModel } from "../hubs/hub.model";
 
 interface HubSocket {
   hubId: string;
+  hubMacAddress: string;
   socket: WebSocket;
 }
 
 const CONTROL_WS_PATH = "/api/device/hubs/control/ws";
+
+const socketsByHubId = new Map<string, HubSocket>();
+
+export async function sendCameraStreamCommandForHome(
+  homeId: string,
+  action: "start" | "stop",
+  streamSessionId = "",
+): Promise<boolean> {
+  const hub = await HubModel.findOne({ home: homeId });
+  if (!hub) {
+    console.warn(`[HUB_WS] Camera command not sent action=${action} home=${homeId} reason=hub_not_found`);
+    return false;
+  }
+
+  const hubSocket = socketsByHubId.get(hub.id);
+  if (!hubSocket) {
+    console.warn(`[HUB_WS] Camera command not sent action=${action} home=${homeId} hub=${hub.id} mac=${hub.macAddress} reason=no_control_socket`);
+    return false;
+  }
+  if (hubSocket.socket.readyState !== WebSocket.OPEN) {
+    console.warn(`[HUB_WS] Camera command not sent action=${action} home=${homeId} hub=${hub.id} mac=${hub.macAddress} socket_state=${hubSocket.socket.readyState}`);
+    return false;
+  }
+
+  try {
+    hubSocket.socket.send(JSON.stringify({
+      type: "camera_stream_command",
+      action,
+      streamSessionId,
+    }));
+    console.info(`[HUB_WS] Camera command sent action=${action} home=${homeId} hub=${hub.id} mac=${hub.macAddress} stream_session=${streamSessionId.slice(0, 8) || "none"}`);
+  } catch (error) {
+    console.warn(`[HUB_WS] Camera command send failed action=${action} home=${homeId} hub=${hub.id} mac=${hub.macAddress} error=${error instanceof Error ? error.message : String(error)}`);
+    return false;
+  }
+  return true;
+}
 
 export function attachHubControlWebSocket(
   server: http.Server,
@@ -17,7 +56,6 @@ export function attachHubControlWebSocket(
   doorLockService: DoorLockService,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
-  const socketsByHubId = new Map<string, HubSocket>();
 
   doorLockService.onCommand((command) => {
     const hubSocket = socketsByHubId.get(command.hubId);
@@ -36,6 +74,7 @@ export function attachHubControlWebSocket(
 
     const deviceApiKey = request.headers["x-device-api-key"];
     if (deviceApiKey !== config.deviceApiKey) {
+      console.warn("[HUB_WS] Rejected control websocket: invalid device API key");
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
       return;
@@ -49,13 +88,20 @@ export function attachHubControlWebSocket(
       .then((hub) => {
         wss.handleUpgrade(request, socket, head, (ws) => {
           const hubId = hub.id;
-          socketsByHubId.get(hubId)?.socket.close(4000, "Replaced by a new control connection");
-          socketsByHubId.set(hubId, { hubId, socket: ws });
+          const existingSocket = socketsByHubId.get(hubId);
+          if (existingSocket) {
+            console.warn(`[HUB_WS] Replacing existing control websocket hub=${hubId} mac=${hubMacAddress}`);
+            existingSocket.socket.close(4000, "Replaced by a new control connection");
+          }
+
+          socketsByHubId.set(hubId, { hubId, hubMacAddress, socket: ws });
+          console.info(`[HUB_WS] Control websocket connected hub=${hubId} mac=${hubMacAddress}`);
 
           ws.on("message", (data) => {
             void handleHubMessage(doorLockService, hubId, ws, data);
           });
-          ws.on("close", () => {
+          ws.on("close", (code, reason) => {
+            console.info(`[HUB_WS] Control websocket closed hub=${hubId} mac=${hubMacAddress} code=${code} reason=${reason.toString()}`);
             if (socketsByHubId.get(hubId)?.socket === ws) {
               socketsByHubId.delete(hubId);
             }
@@ -68,6 +114,7 @@ export function attachHubControlWebSocket(
         });
       })
       .catch(() => {
+        console.warn(`[HUB_WS] Rejected control websocket: auth failed mac=${hubMacAddress}`);
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
         socket.destroy();
       });
@@ -99,6 +146,11 @@ async function handleHubMessage(
     message = JSON.parse(data.toString()) as Record<string, unknown>;
   } catch {
     socket.send(JSON.stringify({ type: "error", error: "Invalid JSON" }));
+    return;
+  }
+
+  if (message.type === "camera_stream_status") {
+    console.info(`[HUB_WS] Camera status hub=${hubId} stream_session=${String(message.streamSessionId || "").slice(0, 8) || "none"} status=${String(message.status || "unknown")}${message.error ? ` error=${String(message.error)}` : ""}`);
     return;
   }
 
