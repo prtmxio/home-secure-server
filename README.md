@@ -71,6 +71,7 @@ User
 - MongoDB with Mongoose
 - JWT for mobile authentication
 - Server-Sent Events for live notifications
+- WebSocket relay for main door live camera feed
 
 ## Environment
 
@@ -387,6 +388,301 @@ This allows the app to show:
 - previous notifications
 - read/unread state
 
+## Step 13. ESP32 streams main door live feed with WebRTC
+
+The hub or ESP32 camera sends the actual camera media over WebRTC. The backend
+does not relay video frames. It only authenticates both sides and relays WebRTC
+signaling messages over WebSocket.
+
+This is the intended flow:
+
+```text
+ESP32 camera/hub
+  -> WebSocket signaling
+  -> Backend auth + signaling relay
+  -> WebSocket signaling
+  -> Flutter app
+
+ESP32 camera/hub
+  -> WebRTC media track
+  -> Flutter app
+```
+
+The WebSocket is only for signaling. The camera video itself should travel as
+WebRTC media.
+
+Signaling WebSocket endpoint:
+
+- `ws://localhost:3000/ws/live-feed`
+- `wss://your-domain.com/ws/live-feed` in production behind TLS
+
+Device signaling query params:
+
+- `role=device`
+- `mode=webrtc`
+- `deviceApiKey=<DEVICE_API_KEY>`
+- `hubMacAddress=<HUB_MAC_ADDRESS>`
+- `hubSecret=<HUB_DEVICE_SECRET>`
+
+Example device URL:
+
+```text
+ws://localhost:3000/ws/live-feed?role=device&mode=webrtc&deviceApiKey=<DEVICE_API_KEY>&hubMacAddress=AA:BB:CC:DD:EE:FF&hubSecret=<HUB_DEVICE_SECRET>
+```
+
+When the ESP32 connects successfully, the backend returns:
+
+```json
+{
+  "type": "ready",
+  "role": "device",
+  "hubId": "<HUB_ID>",
+  "mode": "webrtc"
+}
+```
+
+If a mobile viewer is already waiting, the backend also sends:
+
+```json
+{
+  "type": "viewer-ready",
+  "hubId": "<HUB_ID>"
+}
+```
+
+The ESP32 should start its WebRTC offer when it receives `viewer-ready`, or when
+it already knows the camera screen is being opened by the app.
+
+ESP32 sends an SDP offer:
+
+```json
+{
+  "type": "offer",
+  "sdp": {
+    "type": "offer",
+    "sdp": "<DEVICE_SDP>"
+  }
+}
+```
+
+ESP32 sends ICE candidates as they are discovered:
+
+```json
+{
+  "type": "ice-candidate",
+  "candidate": {
+    "candidate": "candidate:...",
+    "sdpMid": "0",
+    "sdpMLineIndex": 0
+  }
+}
+```
+
+Mobile viewer query params:
+
+- `role=viewer`
+- `mode=webrtc`
+- `token=<USER_JWT>`
+- `hubId=<HUB_ID>`
+
+Example viewer URL:
+
+```text
+ws://localhost:3000/ws/live-feed?role=viewer&mode=webrtc&token=<USER_JWT>&hubId=<HUB_ID>
+```
+
+When the app opens the hub live feed page, it connects to this WebSocket. When
+the mobile viewer connects successfully, the backend returns:
+
+```json
+{
+  "type": "ready",
+  "role": "viewer",
+  "hubId": "<HUB_ID>",
+  "mode": "webrtc",
+  "status": "waiting"
+}
+```
+
+The Flutter app then tells the ESP32 that a viewer is ready:
+
+```json
+{
+  "type": "viewer-ready"
+}
+```
+
+The backend forwards this to connected ESP32 device clients for the same hub.
+
+Mobile app returns an SDP answer:
+
+```json
+{
+  "type": "answer",
+  "sdp": {
+    "type": "answer",
+    "sdp": "<MOBILE_SDP>"
+  }
+}
+```
+
+Mobile app also sends ICE candidates as they are discovered:
+
+```json
+{
+  "type": "ice-candidate",
+  "candidate": {
+    "candidate": "<ICE_CANDIDATE>",
+    "sdpMid": "0",
+    "sdpMLineIndex": 0
+  }
+}
+```
+
+### WebRTC message sequence
+
+```text
+1. ESP32 connects:
+   ws://.../ws/live-feed?role=device&mode=webrtc&deviceApiKey=...&hubMacAddress=...&hubSecret=...
+
+2. Backend validates:
+   - device API key
+   - hub MAC address
+   - hub secret
+
+3. App connects:
+   ws://.../ws/live-feed?role=viewer&mode=webrtc&token=...&hubId=...
+
+4. Backend validates:
+   - user JWT
+   - requested hub belongs to user
+
+5. App sends:
+   { "type": "viewer-ready" }
+
+6. Backend forwards to ESP32:
+   { "type": "viewer-ready", "hubId": "<HUB_ID>" }
+
+7. ESP32 creates WebRTC peer connection:
+   - attach camera video track
+   - create SDP offer
+   - set local description
+
+8. ESP32 sends:
+   { "type": "offer", "sdp": { "type": "offer", "sdp": "..." } }
+
+9. Backend forwards offer to app.
+
+10. App creates WebRTC peer connection:
+    - set remote description from ESP32 offer
+    - create answer
+    - set local description
+
+11. App sends:
+    { "type": "answer", "sdp": { "type": "answer", "sdp": "..." } }
+
+12. Backend forwards answer to ESP32.
+
+13. ESP32 sets remote description from app answer.
+
+14. Both sides exchange:
+    { "type": "ice-candidate", "candidate": { ... } }
+
+15. When ICE connects, app receives remote video track and displays it.
+```
+
+### ESP32 side responsibilities
+
+The ESP32/hub firmware must:
+
+- connect to Wi-Fi
+- know its `hubMacAddress`
+- store its `hubSecret` received during hub registration
+- open the signaling WebSocket as `role=device&mode=webrtc`
+- create a WebRTC peer connection when a viewer is ready
+- capture the main door camera stream
+- add the camera stream as a WebRTC video track
+- send `offer` to backend
+- receive `answer` from backend and set it as remote description
+- exchange ICE candidates through the backend
+- keep the WebSocket alive while the feed is active
+
+Pseudo flow:
+
+```text
+connectWebSocket(deviceUrl)
+wait for ready
+wait for viewer-ready
+
+pc = createPeerConnection(stunTurnConfig)
+pc.addTrack(cameraVideoTrack)
+
+pc.onIceCandidate = send { type: "ice-candidate", candidate }
+
+offer = pc.createOffer()
+pc.setLocalDescription(offer)
+send { type: "offer", sdp: offer }
+
+on message answer:
+  pc.setRemoteDescription(answer)
+
+on message ice-candidate:
+  pc.addIceCandidate(candidate)
+```
+
+### Flutter app side behavior
+
+The Flutter app already opens the live feed from the hub details camera icon.
+Internally it:
+
+- opens `role=viewer&mode=webrtc`
+- creates an `RTCPeerConnection`
+- sends `viewer-ready`
+- waits for the ESP32 `offer`
+- sets the offer as remote description
+- creates and sends an `answer`
+- exchanges ICE candidates
+- renders the remote video track using `RTCVideoView`
+
+### Signaling message directions
+
+| Message | Sent by | Forwarded to | Purpose |
+| --- | --- | --- | --- |
+| `ready` | Backend | Device or app | Connection accepted |
+| `viewer-ready` | App/backend | Device | Start camera offer |
+| `offer` | ESP32 | App | Start WebRTC session |
+| `answer` | App | ESP32 | Accept WebRTC session |
+| `ice-candidate` | Both | Other peer | NAT traversal |
+| `status` | Backend | App | Device live/offline state |
+| `error` | Backend | Device or app | Auth/signaling failure |
+
+The backend validates that:
+
+- device publishers have the correct global device API key
+- device publishers know the hub MAC address and hub secret
+- mobile viewers own the requested hub
+
+The backend relays signaling only. WebRTC media flows peer-to-peer when network
+conditions allow it. For production across restrictive NATs, add a TURN server.
+
+Recommended production ICE config:
+
+```json
+{
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    {
+      "urls": "turn:turn.your-domain.com:3478",
+      "username": "<TURN_USERNAME>",
+      "credential": "<TURN_PASSWORD>"
+    }
+  ]
+}
+```
+
+Without TURN, WebRTC may fail on some mobile networks, CGNAT, corporate Wi-Fi,
+or symmetric NAT routers.
+
 ## End-to-end summary
 
 1. User logs in.
@@ -401,7 +697,8 @@ This allows the app to show:
 10. Backend returns hub MAC and sensor MAC provisioning payload.
 11. Hub sends activity events to backend.
 12. Backend creates logs and notifications.
-13. Mobile app shows live and historical alerts.
+13. ESP32 camera and Flutter app exchange WebRTC signaling through backend.
+14. Mobile app shows live and historical alerts plus the main door live feed.
 
 ## Main persisted collections
 

@@ -84,6 +84,7 @@ export class AuthService {
     }
 
     const otp = this.config.nodeEnv === "production" ? String(crypto.randomInt(100000, 999999)) : "123456";
+    console.log(otp)
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     otpStore.set(phoneNumber, { phoneNumber, otp, expiresAt });
 
