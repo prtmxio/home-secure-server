@@ -10,9 +10,12 @@ const sensor_model_1 = require("../sensors/sensor.model");
 class DeviceService {
     notificationService;
     homeService;
-    constructor(notificationService, homeService) {
+    cameraRelay;
+    cameraFrameLogCounts = new Map();
+    constructor(notificationService, homeService, cameraRelay) {
         this.notificationService = notificationService;
         this.homeService = homeService;
+        this.cameraRelay = cameraRelay;
     }
     async registerHubOverWifi(payload) {
         return this.homeService.completeHubRegistration(payload);
@@ -52,6 +55,40 @@ class DeviceService {
         sensor.provisionKey = null;
         await sensor.save();
         return { sensorMacAddress, provisionKey };
+    }
+    async fetchHubSensors(payload) {
+        const hub = await this.authenticateHub(payload);
+        const sensors = await sensor_model_1.SensorModel.find({ hub: hub._id }).sort({ createdAt: 1 });
+        return {
+            sensors: sensors.map((sensor) => ({
+                sensorMacAddress: sensor.macAddress,
+                name: sensor.name,
+                type: sensor.type,
+                zone: sensor.zone,
+                status: sensor.status,
+            })),
+        };
+    }
+    async ingestCameraFrame(payload) {
+        if (!payload.contentType?.toLowerCase().startsWith("image/jpeg")) {
+            console.warn(`[CAMERA] Rejected frame hub_mac=${payload.hubMacAddress || "missing"} reason=bad_content_type content_type=${payload.contentType || "missing"}`);
+            throw new api_error_1.ApiError(415, "Camera frame must be image/jpeg");
+        }
+        if (!Buffer.isBuffer(payload.frame) || payload.frame.length === 0) {
+            console.warn(`[CAMERA] Rejected frame hub_mac=${payload.hubMacAddress || "missing"} reason=empty_body`);
+            throw new api_error_1.ApiError(400, "Camera frame body is required");
+        }
+        const hub = await this.authenticateHub(payload);
+        this.cameraRelay.publishFrame(hub.home.toString(), payload.frame);
+        const frameCount = (this.cameraFrameLogCounts.get(hub.id) || 0) + 1;
+        this.cameraFrameLogCounts.set(hub.id, frameCount);
+        if (frameCount === 1 || frameCount % 30 === 0) {
+            console.info(`[CAMERA] Accepted frame hub=${hub.id} mac=${hub.macAddress} home=${hub.home.toString()} bytes=${payload.frame.length} count=${frameCount}`);
+        }
+        hub.lastSeenAt = new Date();
+        hub.status = "online";
+        await hub.save();
+        return { accepted: true, bytes: payload.frame.length, capturedAt: new Date() };
     }
     async ingestHubEvent(payload) {
         const hubMacAddress = (0, mac_address_1.normalizeMacAddress)(payload.hubMacAddress);
@@ -110,6 +147,18 @@ class DeviceService {
             activityLogId: activityLog.id,
             notification: this.notificationService.serialize(populatedNotification),
         };
+    }
+    async authenticateHub(payload) {
+        const hubMacAddress = (0, mac_address_1.normalizeMacAddress)(payload.hubMacAddress);
+        const hubSecret = String(payload.hubSecret || "");
+        const hub = await hub_model_1.HubModel.findOne({ macAddress: hubMacAddress });
+        if (!hub)
+            throw new api_error_1.ApiError(404, "Hub not found");
+        if (hub.deviceSecret !== hubSecret)
+            throw new api_error_1.ApiError(401, "Invalid hub secret");
+        if (!hub.owner || !hub.home)
+            throw new api_error_1.ApiError(409, "Hub is not registered to any home");
+        return hub;
     }
 }
 exports.DeviceService = DeviceService;

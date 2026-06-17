@@ -5,17 +5,22 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const node_test_1 = __importDefault(require("node:test"));
 const strict_1 = __importDefault(require("node:assert/strict"));
-const node_http_1 = require("node:http");
+const http_1 = __importDefault(require("http"));
+const events_1 = require("events");
 const mongoose_1 = __importDefault(require("mongoose"));
 const mongodb_memory_server_1 = require("mongodb-memory-server");
 const supertest_1 = __importDefault(require("supertest"));
 const ws_1 = __importDefault(require("ws"));
 const app_1 = require("../src/app");
 const database_1 = require("../src/config/database");
+const hub_control_ws_1 = require("../src/modules/device-control/hub-control-ws");
 const hub_model_1 = require("../src/modules/hubs/hub.model");
 const live_feed_server_1 = require("../src/modules/live-feed/live-feed.server");
 let mongoServer;
 let app;
+let realtimeServices;
+let httpServer;
+let httpServerUrl;
 let testConfig;
 node_test_1.default.before(async () => {
     mongoServer = await mongodb_memory_server_1.MongoMemoryServer.create();
@@ -30,9 +35,23 @@ node_test_1.default.before(async () => {
         pairingSessionTtlSeconds: 60,
         projectRoot: process.cwd(),
     };
-    app = (0, app_1.createApp)(testConfig);
+    realtimeServices = (0, app_1.createRealtimeServices)();
+    app = (0, app_1.createApp)(testConfig, realtimeServices);
+    httpServer = http_1.default.createServer(app);
+    (0, hub_control_ws_1.attachHubControlWebSocket)(httpServer, testConfig, realtimeServices.doorLockService);
+    (0, live_feed_server_1.attachLiveFeedServer)(httpServer, testConfig, {
+        isDeviceConnected: hub_control_ws_1.isHubControlConnected,
+        sendToDevice: hub_control_ws_1.sendLiveFeedSignalToHub,
+    });
+    httpServer.listen(0, "127.0.0.1");
+    await (0, events_1.once)(httpServer, "listening");
+    const address = httpServer.address();
+    strict_1.default.ok(address && typeof address === "object");
+    httpServerUrl = `http://127.0.0.1:${address.port}`;
 });
 node_test_1.default.after(async () => {
+    httpServer.close();
+    await (0, events_1.once)(httpServer, "close");
     await (0, database_1.disconnectDatabase)();
     await mongoServer.stop();
 });
@@ -162,15 +181,120 @@ node_test_1.default.afterEach(async () => {
     strict_1.default.equal(secondVerifyResponse.body.status, "authenticated");
     strict_1.default.ok(secondVerifyResponse.body.token);
 });
-(0, node_test_1.default)("esp32 and mobile viewer can exchange WebRTC signaling for the main door feed", async () => {
+(0, node_test_1.default)("hub can upload camera frames and user can mint a short-lived stream token", async () => {
+    const { token, homeId, hubSecret } = await onboardHub("Camera User", "camera@example.com", "AA:BB:CC:DD:EE:10");
+    const frame = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0xff, 0xd9]);
+    const uploadResponse = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/camera/frame")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:10")
+        .set("x-hub-secret", hubSecret)
+        .set("Content-Type", "image/jpeg")
+        .send(frame);
+    strict_1.default.equal(uploadResponse.status, 202);
+    strict_1.default.equal(uploadResponse.body.accepted, true);
+    strict_1.default.equal(uploadResponse.body.bytes, frame.length);
+    const tokenResponse = await (0, supertest_1.default)(app)
+        .post(`/api/homes/${homeId}/camera/stream-token`)
+        .set("Authorization", `Bearer ${token}`);
+    strict_1.default.equal(tokenResponse.status, 201);
+    strict_1.default.match(tokenResponse.body.streamPath, /^\/api\/camera\/streams\//);
+    const deniedUpload = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/camera/frame")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:10")
+        .set("x-hub-secret", "wrong")
+        .set("Content-Type", "image/jpeg")
+        .send(frame);
+    strict_1.default.equal(deniedUpload.status, 401);
+});
+(0, node_test_1.default)("user lock command is pushed to the hub over WebSocket and ACK updates status", async () => {
+    const { token, homeId, hubSecret } = await onboardHub("Lock User", "lock@example.com", "AA:BB:CC:DD:EE:20");
+    const ws = openHubControlSocket("AA:BB:CC:DD:EE:20", hubSecret);
+    try {
+        await waitWsOpen(ws);
+        const commandPromise = nextWsJsonOfType(ws, "door_lock_command");
+        const commandResponse = await (0, supertest_1.default)(app)
+            .post(`/api/homes/${homeId}/door-lock/open`)
+            .set("Authorization", `Bearer ${token}`);
+        strict_1.default.equal(commandResponse.status, 201);
+        const command = await commandPromise;
+        strict_1.default.equal(command.type, "door_lock_command");
+        strict_1.default.equal(command.mode, "auto_lock");
+        strict_1.default.equal(command.action, "open");
+        strict_1.default.equal(command.durationMs, 3000);
+        const ackPromise = nextWsJsonOfType(ws, "door_lock_ack_received");
+        ws.send(JSON.stringify({
+            type: "door_lock_ack",
+            commandId: command.commandId,
+            status: "executed",
+            lockState: "locked",
+        }));
+        const ack = await ackPromise;
+        strict_1.default.equal(ack.type, "door_lock_ack_received");
+        strict_1.default.equal(ack.status, "executed");
+        const lockResponse = await (0, supertest_1.default)(app)
+            .get(`/api/homes/${homeId}/door-lock`)
+            .set("Authorization", `Bearer ${token}`);
+        strict_1.default.equal(lockResponse.status, 200);
+        strict_1.default.equal(lockResponse.body.command.status, "executed");
+        strict_1.default.equal(lockResponse.body.command.lockState, "locked");
+    }
+    finally {
+        ws.close();
+    }
+});
+(0, node_test_1.default)("door lock toggle rejects unsafe durations", async () => {
+    const { token, homeId } = await onboardHub("Limit User", "limit@example.com", "AA:BB:CC:DD:EE:30");
+    const response = await (0, supertest_1.default)(app)
+        .post(`/api/homes/${homeId}/door-lock/toggle`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({ state: "on", durationMs: 10001 });
+    strict_1.default.equal(response.status, 400);
+});
+(0, node_test_1.default)("webRTC live feed signaling uses the existing hub control WebSocket", async () => {
+    const { token, hubId, hubSecret } = await onboardHub("Door Viewer", "door-viewer@example.com", "AA:BB:CC:DD:EE:01");
+    const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:01", hubSecret);
+    const viewerWs = new ws_1.default(`${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`);
+    try {
+        await waitWsOpen(hubWs);
+        await waitWsOpen(viewerWs);
+        const viewerReady = await nextWsJsonOfType(viewerWs, "ready");
+        strict_1.default.equal(viewerReady.role, "viewer");
+        strict_1.default.equal(viewerReady.mode, "webrtc");
+        strict_1.default.equal(viewerReady.status, "live");
+        viewerWs.send(JSON.stringify({ type: "viewer-ready" }));
+        const viewerReadyForHub = await nextWsJsonOfType(hubWs, "viewer-ready");
+        strict_1.default.equal(viewerReadyForHub.hubId, hubId);
+        hubWs.send(JSON.stringify({
+            type: "offer",
+            sdp: { type: "offer", sdp: "device-offer-sdp" },
+        }));
+        const offer = await nextWsJsonOfType(viewerWs, "offer");
+        strict_1.default.equal(offer.hubId, hubId);
+        strict_1.default.deepEqual(offer.sdp, { type: "offer", sdp: "device-offer-sdp" });
+        viewerWs.send(JSON.stringify({
+            type: "answer",
+            sdp: { type: "answer", sdp: "mobile-answer-sdp" },
+        }));
+        const answer = await nextWsJsonOfType(hubWs, "answer");
+        strict_1.default.equal(answer.hubId, hubId);
+        strict_1.default.deepEqual(answer.sdp, { type: "answer", sdp: "mobile-answer-sdp" });
+    }
+    finally {
+        viewerWs.close();
+        hubWs.close();
+    }
+});
+async function onboardHub(name, email, hubMacAddress) {
     const registerResponse = await (0, supertest_1.default)(app).post("/api/auth/register").send({
-        name: "Door Viewer",
-        email: "door-viewer@example.com",
+        name,
+        email,
         password: "secret123",
     });
     strict_1.default.equal(registerResponse.status, 201);
     const loginResponse = await (0, supertest_1.default)(app).post("/api/auth/login").send({
-        email: "door-viewer@example.com",
+        email,
         password: "secret123",
     });
     strict_1.default.equal(loginResponse.status, 200);
@@ -179,80 +303,104 @@ node_test_1.default.afterEach(async () => {
         .post("/api/homes/setup-hub")
         .set("Authorization", `Bearer ${token}`)
         .send({
-        hubMacAddress: "AA:BB:CC:DD:EE:01",
-        homeName: "Door Home",
-        location: "Front Door",
+        hubMacAddress,
+        homeName: `${name} Home`,
+        location: "Test",
     });
     strict_1.default.equal(setupResponse.status, 201);
     const hubRegisterResponse = await (0, supertest_1.default)(app)
         .post("/api/device/hubs/register")
         .set("x-device-api-key", "device-test-key")
         .send({
-        hubMacAddress: "AA:BB:CC:DD:EE:01",
+        hubMacAddress,
         provisioningToken: setupResponse.body.setupSession.provisioningToken,
     });
     strict_1.default.equal(hubRegisterResponse.status, 201);
-    const hub = await hub_model_1.HubModel.findOne({ macAddress: "AA:BB:CC:DD:EE:01" });
+    const hub = await hub_model_1.HubModel.findOne({ macAddress: hubMacAddress });
     strict_1.default.ok(hub);
-    const server = (0, node_http_1.createServer)(app);
-    (0, live_feed_server_1.attachLiveFeedServer)(server, testConfig);
-    await new Promise((resolve) => server.listen(0, resolve));
-    const address = server.address();
-    const wsBaseUrl = `ws://127.0.0.1:${address.port}/ws/live-feed`;
-    const viewer = new ws_1.default(`${wsBaseUrl}?role=viewer&mode=webrtc&token=${token}&hubId=${hub.id}`);
-    const device = new ws_1.default(`${wsBaseUrl}?role=device&mode=webrtc&deviceApiKey=device-test-key&hubMacAddress=AA:BB:CC:DD:EE:01&hubSecret=${hub.deviceSecret}`);
-    try {
-        const viewerReady = await nextJsonMessage(viewer);
-        strict_1.default.equal(viewerReady.type, "ready");
-        strict_1.default.equal(viewerReady.role, "viewer");
-        strict_1.default.equal(viewerReady.mode, "webrtc");
-        const deviceReady = await nextJsonMessage(device);
-        strict_1.default.equal(deviceReady.type, "ready");
-        strict_1.default.equal(deviceReady.role, "device");
-        strict_1.default.equal(deviceReady.mode, "webrtc");
-        viewer.send(JSON.stringify({ type: "viewer-ready" }));
-        const viewerReadyForDevice = await nextJsonMessage(device, "viewer-ready");
-        strict_1.default.equal(viewerReadyForDevice.hubId, hub.id);
-        device.send(JSON.stringify({
-            type: "offer",
-            sdp: { type: "offer", sdp: "device-offer-sdp" },
-        }));
-        const offer = await nextJsonMessage(viewer, "offer");
-        strict_1.default.equal(offer.hubId, hub.id);
-        strict_1.default.deepEqual(offer.sdp, { type: "offer", sdp: "device-offer-sdp" });
-        viewer.send(JSON.stringify({
-            type: "answer",
-            sdp: { type: "answer", sdp: "mobile-answer-sdp" },
-        }));
-        const answer = await nextJsonMessage(device, "answer");
-        strict_1.default.equal(answer.hubId, hub.id);
-        strict_1.default.deepEqual(answer.sdp, { type: "answer", sdp: "mobile-answer-sdp" });
-    }
-    finally {
-        viewer.close();
-        device.close();
-        await new Promise((resolve) => server.close(() => resolve()));
-    }
-});
-function nextJsonMessage(socket, expectedType) {
+    return {
+        token,
+        homeId: hubRegisterResponse.body.home.id,
+        hubId: hub.id,
+        hubSecret: hub.deviceSecret,
+    };
+}
+function openHubControlSocket(hubMacAddress, hubSecret) {
+    return new ws_1.default(`${httpServerUrl.replace("http://", "ws://")}/api/device/hubs/control/ws`, {
+        headers: {
+            "x-device-api-key": "device-test-key",
+            "x-hub-mac-address": hubMacAddress,
+            "x-hub-secret": hubSecret,
+        },
+    });
+}
+async function nextWsJson(ws) {
     return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => reject(new Error("Timed out waiting for WebSocket message")), 2000);
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error("Timed out waiting for WebSocket message"));
+        }, 5000);
         const onMessage = (data) => {
-            const message = JSON.parse(data.toString());
-            if (expectedType && message.type !== expectedType) {
-                socket.once("message", onMessage);
-                return;
-            }
-            clearTimeout(timeout);
-            socket.off("error", onError);
-            resolve(message);
+            cleanup();
+            resolve(JSON.parse(data.toString()));
         };
         const onError = (error) => {
-            clearTimeout(timeout);
-            socket.off("message", onMessage);
+            cleanup();
             reject(error);
         };
-        socket.once("message", onMessage);
-        socket.once("error", onError);
+        const onClose = (code, reason) => {
+            cleanup();
+            reject(new Error(`WebSocket closed before message: ${code} ${reason.toString()}`));
+        };
+        const cleanup = () => {
+            clearTimeout(timeout);
+            ws.off("message", onMessage);
+            ws.off("error", onError);
+            ws.off("close", onClose);
+        };
+        ws.once("message", onMessage);
+        ws.once("error", onError);
+        ws.once("close", onClose);
+    });
+}
+async function nextWsJsonOfType(ws, type) {
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline) {
+        const message = await nextWsJson(ws);
+        if (message.type === type) {
+            return message;
+        }
+    }
+    throw new Error(`Timed out waiting for WebSocket message type ${type}`);
+}
+async function waitWsOpen(ws) {
+    if (ws.readyState === ws_1.default.OPEN)
+        return;
+    return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error(`Timed out waiting for WebSocket open; state=${ws.readyState}`));
+        }, 5000);
+        const onOpen = () => {
+            cleanup();
+            resolve();
+        };
+        const onError = (error) => {
+            cleanup();
+            reject(error);
+        };
+        const onClose = (code, reason) => {
+            cleanup();
+            reject(new Error(`WebSocket closed before open: ${code} ${reason.toString()}`));
+        };
+        const cleanup = () => {
+            clearTimeout(timeout);
+            ws.off("open", onOpen);
+            ws.off("error", onError);
+            ws.off("close", onClose);
+        };
+        ws.once("open", onOpen);
+        ws.once("error", onError);
+        ws.once("close", onClose);
     });
 }

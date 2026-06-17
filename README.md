@@ -398,9 +398,9 @@ This is the intended flow:
 
 ```text
 ESP32 camera/hub
-  -> WebSocket signaling
+  -> Hub control WebSocket
   -> Backend auth + signaling relay
-  -> WebSocket signaling
+  -> Viewer WebSocket signaling
   -> Flutter app
 
 ESP32 camera/hub
@@ -408,36 +408,33 @@ ESP32 camera/hub
   -> Flutter app
 ```
 
-The WebSocket is only for signaling. The camera video itself should travel as
-WebRTC media.
+The backend WebSockets are only for commands and signaling. The hub should keep
+one device WebSocket open for door-lock commands, camera start/stop commands,
+and WebRTC live-feed signaling. The camera video itself should travel as WebRTC
+media.
 
-Signaling WebSocket endpoint:
+Hub device WebSocket endpoint:
 
-- `ws://localhost:3000/ws/live-feed`
-- `wss://your-domain.com/ws/live-feed` in production behind TLS
+- `ws://localhost:3000/api/device/hubs/control/ws`
+- `wss://your-domain.com/api/device/hubs/control/ws` in production behind TLS
 
-Device signaling query params:
+Device WebSocket auth headers:
 
-- `role=device`
-- `mode=webrtc`
-- `deviceApiKey=<DEVICE_API_KEY>`
-- `hubMacAddress=<HUB_MAC_ADDRESS>`
-- `hubSecret=<HUB_DEVICE_SECRET>`
+- `x-device-api-key: <DEVICE_API_KEY>`
+- `x-hub-mac-address: <HUB_MAC_ADDRESS>`
+- `x-hub-secret: <HUB_DEVICE_SECRET>`
 
 Example device URL:
 
 ```text
-ws://localhost:3000/ws/live-feed?role=device&mode=webrtc&deviceApiKey=<DEVICE_API_KEY>&hubMacAddress=AA:BB:CC:DD:EE:FF&hubSecret=<HUB_DEVICE_SECRET>
+ws://localhost:3000/api/device/hubs/control/ws
 ```
 
 When the ESP32 connects successfully, the backend returns:
 
 ```json
 {
-  "type": "ready",
-  "role": "device",
-  "hubId": "<HUB_ID>",
-  "mode": "webrtc"
+  "type": "ready"
 }
 ```
 
@@ -450,8 +447,10 @@ If a mobile viewer is already waiting, the backend also sends:
 }
 ```
 
-The ESP32 should start its WebRTC offer when it receives `viewer-ready`, or when
-it already knows the camera screen is being opened by the app.
+The ESP32 should start its WebRTC offer when it receives `viewer-ready` on the
+same hub control WebSocket. That socket is also used for messages like
+`door_lock_command`, `door_lock_ack`, `camera_stream_command`, and
+`camera_stream_status`.
 
 ESP32 sends an SDP offer:
 
@@ -543,7 +542,8 @@ Mobile app also sends ICE candidates as they are discovered:
 
 ```text
 1. ESP32 connects:
-   ws://.../ws/live-feed?role=device&mode=webrtc&deviceApiKey=...&hubMacAddress=...&hubSecret=...
+   ws://.../api/device/hubs/control/ws
+   with x-device-api-key, x-hub-mac-address, and x-hub-secret headers.
 
 2. Backend validates:
    - device API key
@@ -598,7 +598,7 @@ The ESP32/hub firmware must:
 - connect to Wi-Fi
 - know its `hubMacAddress`
 - store its `hubSecret` received during hub registration
-- open the signaling WebSocket as `role=device&mode=webrtc`
+- open one hub control WebSocket at `/api/device/hubs/control/ws`
 - create a WebRTC peer connection when a viewer is ready
 - capture the main door camera stream
 - add the camera stream as a WebRTC video track
@@ -682,6 +682,455 @@ Recommended production ICE config:
 
 Without TURN, WebRTC may fail on some mobile networks, CGNAT, corporate Wi-Fi,
 or symmetric NAT routers.
+
+## ESP32 integration guide
+
+This section is the firmware-side contract. All device APIs require:
+
+- `X-Device-Api-Key: <DEVICE_API_KEY>`
+
+After hub registration, all hub-owned APIs and the hub WebSocket also require:
+
+- `X-Hub-Mac-Address: <HUB_MAC_ADDRESS>`
+- `X-Hub-Secret: <HUB_DEVICE_SECRET>`
+
+The hub must keep only one long-running WebSocket open:
+
+```text
+ws://localhost:3000/api/device/hubs/control/ws
+```
+
+Use `wss://your-domain.com/api/device/hubs/control/ws` in production.
+
+That single socket is used for:
+
+- door lock commands
+- door lock ACKs
+- camera start/stop commands
+- WebRTC live-feed signaling
+- camera stream status
+
+### 1. First-time hub registration
+
+The mobile app creates a setup session and sends the returned provisioning token
+to the hub over BLE. After the hub connects to Wi-Fi, the hub calls:
+
+```http
+POST /api/device/hubs/register
+X-Device-Api-Key: <DEVICE_API_KEY>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "hubMacAddress": "AA:BB:CC:DD:EE:FF",
+  "provisioningToken": "<PROVISIONING_TOKEN_FROM_MOBILE_APP>"
+}
+```
+
+Response:
+
+```json
+{
+  "home": {
+    "id": "<HOME_ID>",
+    "name": "Skyline Apartment",
+    "hub": {
+      "id": "<HUB_ID>",
+      "macAddress": "AA:BB:CC:DD:EE:FF"
+    },
+    "sensors": []
+  },
+  "hubSecret": "<STORE_THIS_SECRET_ON_ESP32>"
+}
+```
+
+Firmware rule:
+
+- Store `hubSecret` in NVS/flash securely.
+- Use this `hubSecret` for every future hub API and WebSocket connection.
+- If the hub loses the secret, it must be reprovisioned.
+
+### 2. Open the hub control WebSocket
+
+After registration, the hub should connect and keep this socket alive:
+
+```text
+ws://localhost:3000/api/device/hubs/control/ws
+```
+
+Headers:
+
+```http
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+```
+
+On successful connection, backend sends:
+
+```json
+{
+  "type": "ready"
+}
+```
+
+Recommended hub behavior:
+
+- reconnect automatically if disconnected
+- send ACKs for commands received on this socket
+- treat this as the only persistent hub WebSocket
+- do not open a separate live-feed WebSocket as the hub
+
+### 3. Door lock command handling
+
+When user triggers door lock action from app, backend sends on the hub control
+WebSocket:
+
+```json
+{
+  "type": "door_lock_command",
+  "commandId": "<COMMAND_ID>",
+  "mode": "auto_lock",
+  "action": "open",
+  "durationMs": 3000
+}
+```
+
+Possible `mode` values:
+
+- `auto_lock`
+- `toggle`
+
+Possible `action` values:
+
+- `open`
+- `on`
+- `off`
+
+Hub should execute the command, then ACK:
+
+```json
+{
+  "type": "door_lock_ack",
+  "commandId": "<COMMAND_ID>",
+  "status": "executed",
+  "lockState": "locked"
+}
+```
+
+Failure ACK:
+
+```json
+{
+  "type": "door_lock_ack",
+  "commandId": "<COMMAND_ID>",
+  "status": "failed",
+  "error": "Motor jammed"
+}
+```
+
+Backend confirms ACK:
+
+```json
+{
+  "type": "door_lock_ack_received",
+  "commandId": "<COMMAND_ID>",
+  "status": "executed"
+}
+```
+
+### 4. Enable sensor pairing mode
+
+When the physical hub pair button is pressed, call:
+
+```http
+POST /api/device/hubs/sensor-pairing-mode
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+```
+
+Response:
+
+```json
+{
+  "sensorPairingSession": {
+    "sensorPairingSessionId": "<SESSION_ID>",
+    "hubId": "<HUB_ID>",
+    "expiresAt": "2026-06-17T10:00:00.000Z"
+  }
+}
+```
+
+After this, the mobile app can scan a sensor QR and pair it to this hub.
+
+### 5. Fetch pending sensor provisioning
+
+After the mobile app pairs a sensor, the hub can fetch the oldest pending sensor
+provisioning payload:
+
+```http
+GET /api/device/hubs/pending-sensor
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+```
+
+Response:
+
+```json
+{
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "provisionKey": "<ONE_TIME_SENSOR_PROVISION_KEY>"
+}
+```
+
+Important:
+
+- `provisionKey` is delivered once.
+- Backend clears it after the hub fetches it.
+- Hub should send the provisioning data to the sensor over the chosen local
+  protocol, for example ESP-NOW.
+
+### 6. Fetch paired sensor list
+
+The hub can fetch all paired sensors:
+
+```http
+GET /api/device/hubs/sensors
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+```
+
+Response:
+
+```json
+{
+  "sensors": [
+    {
+      "sensorMacAddress": "11:22:33:44:55:66",
+      "name": "Front Door Frame Sensor",
+      "type": "contact",
+      "zone": "Front Door Frame",
+      "status": "paired"
+    }
+  ]
+}
+```
+
+### 7. Send hub or sensor activity events
+
+When the hub or a paired sensor detects activity, call:
+
+```http
+POST /api/device/hubs/events
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+Content-Type: application/json
+```
+
+Hub-level event:
+
+```json
+{
+  "eventType": "hub_online",
+  "severity": "info",
+  "payload": {
+    "firmwareVersion": "1.0.0"
+  }
+}
+```
+
+Sensor event:
+
+```json
+{
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "eventType": "motion_detected",
+  "severity": "critical",
+  "payload": {
+    "batteryPercent": 91,
+    "rssi": -58
+  }
+}
+```
+
+Response:
+
+```json
+{
+  "activityLogId": "<ACTIVITY_LOG_ID>",
+  "notification": {
+    "id": "<NOTIFICATION_ID>",
+    "eventType": "motion_detected",
+    "severity": "critical"
+  }
+}
+```
+
+### 8. Camera control command
+
+When the first mobile viewer opens the camera stream, backend sends this on the
+same hub control WebSocket:
+
+```json
+{
+  "type": "camera_stream_command",
+  "action": "start",
+  "streamSessionId": "<STREAM_SESSION_ID>"
+}
+```
+
+When the last viewer leaves, backend sends:
+
+```json
+{
+  "type": "camera_stream_command",
+  "action": "stop",
+  "streamSessionId": "<STREAM_SESSION_ID>"
+}
+```
+
+Hub should report camera status on the same socket:
+
+```json
+{
+  "type": "camera_stream_status",
+  "streamSessionId": "<STREAM_SESSION_ID>",
+  "status": "started"
+}
+```
+
+Failure example:
+
+```json
+{
+  "type": "camera_stream_status",
+  "streamSessionId": "<STREAM_SESSION_ID>",
+  "status": "failed",
+  "error": "Camera init failed"
+}
+```
+
+### 9. WebRTC live-feed signaling
+
+The hub sends and receives WebRTC signaling on the same hub control WebSocket.
+
+When app viewer is ready, backend sends to hub:
+
+```json
+{
+  "type": "viewer-ready",
+  "hubId": "<HUB_ID>"
+}
+```
+
+Hub should create a WebRTC peer connection, attach the camera track, create an
+offer, set it as local description, then send:
+
+```json
+{
+  "type": "offer",
+  "sdp": {
+    "type": "offer",
+    "sdp": "<DEVICE_SDP>"
+  }
+}
+```
+
+App answers through backend. Hub receives:
+
+```json
+{
+  "type": "answer",
+  "hubId": "<HUB_ID>",
+  "sdp": {
+    "type": "answer",
+    "sdp": "<MOBILE_SDP>"
+  }
+}
+```
+
+Both sides exchange ICE candidates.
+
+Hub sends:
+
+```json
+{
+  "type": "ice-candidate",
+  "candidate": {
+    "candidate": "candidate:...",
+    "sdpMid": "0",
+    "sdpMLineIndex": 0
+  }
+}
+```
+
+Hub receives:
+
+```json
+{
+  "type": "ice-candidate",
+  "hubId": "<HUB_ID>",
+  "candidate": {
+    "candidate": "candidate:...",
+    "sdpMid": "0",
+    "sdpMLineIndex": 0
+  }
+}
+```
+
+### 10. Legacy JPEG camera frame upload
+
+For simple MJPEG fallback or diagnostics, the hub can upload individual JPEG
+frames over HTTP:
+
+```http
+POST /api/device/hubs/camera/frame
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+Content-Type: image/jpeg
+
+<raw jpeg bytes>
+```
+
+Response:
+
+```json
+{
+  "accepted": true,
+  "bytes": 8421,
+  "capturedAt": "2026-06-17T10:00:00.000Z"
+}
+```
+
+This endpoint is not the preferred low-latency live feed path. Use WebRTC for
+main-door live video.
+
+### ESP32 startup checklist
+
+On every boot:
+
+1. Load Wi-Fi credentials.
+2. Connect to Wi-Fi.
+3. Load `hubMacAddress` and `hubSecret`.
+4. If no `hubSecret`, start BLE provisioning flow.
+5. Connect to `/api/device/hubs/control/ws`.
+6. Wait for `{ "type": "ready" }`.
+7. Process socket messages forever:
+   - `door_lock_command`
+   - `camera_stream_command`
+   - `viewer-ready`
+   - `answer`
+   - `ice-candidate`
+8. Send REST events for hub/sensor activity.
+9. Reconnect the WebSocket if it closes.
 
 ## End-to-end summary
 

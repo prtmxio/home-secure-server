@@ -25,6 +25,22 @@ class DeviceController {
         });
         res.status(200).json(result);
     });
+    fetchHubSensors = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.deviceService.fetchHubSensors({
+            hubMacAddress: (req.headers["x-hub-mac-address"] || ""),
+            hubSecret: (req.headers["x-hub-secret"] || ""),
+        });
+        res.status(200).json(result);
+    });
+    ingestCameraFrame = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.deviceService.ingestCameraFrame({
+            hubMacAddress: (req.headers["x-hub-mac-address"] || ""),
+            hubSecret: (req.headers["x-hub-secret"] || ""),
+            contentType: req.headers["content-type"],
+            frame: req.body,
+        });
+        res.status(202).json(result);
+    });
     ingestHubEvent = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const result = await this.deviceService.ingestHubEvent({
             ...req.body,

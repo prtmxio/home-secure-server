@@ -26,6 +26,24 @@ export class DeviceController {
     res.status(200).json(result);
   });
 
+  fetchHubSensors = asyncHandler(async (req: Request, res: Response) => {
+    const result = await this.deviceService.fetchHubSensors({
+      hubMacAddress: (req.headers["x-hub-mac-address"] || "") as string,
+      hubSecret: (req.headers["x-hub-secret"] || "") as string,
+    });
+    res.status(200).json(result);
+  });
+
+  ingestCameraFrame = asyncHandler(async (req: Request, res: Response) => {
+    const result = await this.deviceService.ingestCameraFrame({
+      hubMacAddress: (req.headers["x-hub-mac-address"] || "") as string,
+      hubSecret: (req.headers["x-hub-secret"] || "") as string,
+      contentType: req.headers["content-type"],
+      frame: req.body as Buffer,
+    });
+    res.status(202).json(result);
+  });
+
   ingestHubEvent = asyncHandler(async (req: Request, res: Response) => {
     const result = await this.deviceService.ingestHubEvent({
       ...req.body,

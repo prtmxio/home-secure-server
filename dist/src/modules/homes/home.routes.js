@@ -9,5 +9,10 @@ function createHomeRoutes(homeController, authMiddleware) {
     router.get("/", homeController.listHomes);
     router.get("/:homeId", homeController.getHome);
     router.post("/:homeId/sensors/pair", homeController.pairSensor);
+    router.post("/:homeId/door-lock/open", homeController.openDoorLock);
+    router.post("/:homeId/door-lock/toggle", homeController.toggleDoorLock);
+    router.get("/:homeId/door-lock", homeController.getDoorLock);
+    router.get("/:homeId/camera/stream", homeController.streamCamera);
+    router.post("/:homeId/camera/stream-token", homeController.createCameraStreamToken);
     return router;
 }
