@@ -35,6 +35,15 @@ test.before(async () => {
     jwtExpiresIn: "1d",
     deviceApiKey: "device-test-key",
     pairingSessionTtlSeconds: 60,
+    metaWhatsappPhoneNumberId: "",
+    metaWhatsappToken: "",
+    metaWhatsappApiVersion: "v22.0",
+    whatsappOtpTemplateName: "login_otp",
+    whatsappCountryCode: "91",
+    firebaseServiceAccountJson: "",
+    firebaseProjectId: "",
+    firebaseClientEmail: "",
+    firebasePrivateKey: "",
     projectRoot: process.cwd(),
   };
   realtimeServices = createRealtimeServices();
@@ -132,7 +141,21 @@ test("user can onboard a hub over BLE setup, pair a door sensor through the hub 
   assert.equal(sensorClaimResponse.status, 201);
   assert.equal(sensorClaimResponse.body.provisioning.sensor.targetHubMacAddress, "AA:BB:CC:DD:EE:FF");
 
-  const finalEventResponse = await request(app)
+  const pendingHomeDetailsResponse = await request(app)
+    .get(`/api/homes/${homeId}`)
+    .set("Authorization", `Bearer ${token}`);
+  assert.equal(pendingHomeDetailsResponse.status, 200);
+  assert.equal(pendingHomeDetailsResponse.body.home.sensors.length, 0);
+
+  const pendingHubSensorsResponse = await request(app)
+    .get("/api/device/hubs/sensors")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+    .set("x-hub-secret", currentHub!.deviceSecret);
+  assert.equal(pendingHubSensorsResponse.status, 200);
+  assert.equal(pendingHubSensorsResponse.body.sensors.length, 0);
+
+  const preConfirmEventResponse = await request(app)
     .post("/api/device/hubs/events")
     .set("x-device-api-key", "device-test-key")
     .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
@@ -140,14 +163,55 @@ test("user can onboard a hub over BLE setup, pair a door sensor through the hub 
     .send({
       sensorMacAddress: "11:22:33:44:55:66",
       eventType: "motion_detected",
-      severity: "critical",
+    });
+  assert.equal(preConfirmEventResponse.status, 409);
+
+  const confirmSensorResponse = await request(app)
+    .post("/api/device/hubs/sensors/confirm")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+    .set("x-hub-secret", currentHub!.deviceSecret)
+    .send({
+      sensorMacAddress: "11:22:33:44:55:66",
+    });
+  assert.equal(confirmSensorResponse.status, 200);
+  assert.equal(confirmSensorResponse.body.paired, true);
+
+  const finalEventResponse = await request(app)
+    .post("/api/device/hubs/events")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+    .set("x-hub-secret", currentHub!.deviceSecret)
+    .send({
+      sensorMacAddress: "11:22:33:44:55:66",
+      eventType: "door_opened",
       payload: {
-        co2Ppm: 610,
-        humidity: 54,
+        module: "magnetic_reed",
+        reedState: "open",
       },
     });
   assert.equal(finalEventResponse.status, 201);
-  assert.equal(finalEventResponse.body.notification.eventType, "motion_detected");
+  assert.equal(finalEventResponse.body.notification.eventType, "door_opened");
+  assert.equal(finalEventResponse.body.notification.title, "Door opened");
+  assert.equal(finalEventResponse.body.notification.severity, "critical");
+
+  const shockEventResponse = await request(app)
+    .post("/api/device/hubs/events")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+    .set("x-hub-secret", currentHub!.deviceSecret)
+    .send({
+      sensorMacAddress: "11:22:33:44:55:66",
+      eventType: "shock_detected",
+      payload: {
+        module: "vibration",
+        shockFound: true,
+      },
+    });
+  assert.equal(shockEventResponse.status, 201);
+  assert.equal(shockEventResponse.body.notification.eventType, "shock_detected");
+  assert.equal(shockEventResponse.body.notification.title, "Shock detected");
+  assert.equal(shockEventResponse.body.notification.severity, "critical");
 
   const homeDetailsResponse = await request(app)
     .get(`/api/homes/${homeId}`)
@@ -160,7 +224,7 @@ test("user can onboard a hub over BLE setup, pair a door sensor through the hub 
     .get("/api/notifications")
     .set("Authorization", `Bearer ${token}`);
   assert.equal(notificationsResponse.status, 200);
-  assert.equal(notificationsResponse.body.notifications.length, 1);
+  assert.equal(notificationsResponse.body.notifications.length, 2);
   assert.equal(notificationsResponse.body.notifications[0].severity, "critical");
 });
 
@@ -169,11 +233,11 @@ test("otp flow registers first-time users and authenticates existing users", asy
     phoneNumber: "+919999999999",
   });
   assert.equal(requestOtpResponse.status, 200);
-  assert.equal(requestOtpResponse.body.otp, "123456");
+  assert.match(requestOtpResponse.body.otp, /^\d{6}$/);
 
   const firstVerifyResponse = await request(app).post("/api/auth/otp/verify").send({
     phoneNumber: "+919999999999",
-    otp: "123456",
+    otp: requestOtpResponse.body.otp,
   });
   assert.equal(firstVerifyResponse.status, 200);
   assert.equal(firstVerifyResponse.body.status, "registration_required");
@@ -189,16 +253,33 @@ test("otp flow registers first-time users and authenticates existing users", asy
   assert.ok(completeResponse.body.token);
   assert.equal(completeResponse.body.user.email, "abc@gmail.com");
 
-  await request(app).post("/api/auth/otp/request").send({
+  const secondRequestOtpResponse = await request(app).post("/api/auth/otp/request").send({
     phoneNumber: "+919999999999",
   });
+  assert.equal(secondRequestOtpResponse.status, 200);
+  assert.match(secondRequestOtpResponse.body.otp, /^\d{6}$/);
   const secondVerifyResponse = await request(app).post("/api/auth/otp/verify").send({
     phoneNumber: "+919999999999",
-    otp: "123456",
+    otp: secondRequestOtpResponse.body.otp,
   });
   assert.equal(secondVerifyResponse.status, 200);
   assert.equal(secondVerifyResponse.body.status, "authenticated");
   assert.ok(secondVerifyResponse.body.token);
+});
+
+test("authenticated users can register mobile push tokens", async () => {
+  const { token } = await onboardHub("Push User", "push@example.com", "AA:BB:CC:DD:EE:11");
+
+  const response = await request(app)
+    .post("/api/notifications/push-token")
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      token: "fcm-test-token",
+      platform: "android",
+    });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.registered, true);
 });
 
 test("hub can upload camera frames and user can mint a short-lived stream token", async () => {
@@ -284,6 +365,64 @@ test("door lock toggle rejects unsafe durations", async () => {
     .send({ state: "on", durationMs: 10001 });
 
   assert.equal(response.status, 400);
+});
+
+test("deleting sensors and hubs sends cleanup commands over hub WebSocket", async () => {
+  const { token, homeId, hubSecret } = await onboardHub("Delete User", "delete@example.com", "AA:BB:CC:DD:EE:40");
+
+  const pairResponse = await request(app)
+    .post(`/api/homes/${homeId}/sensors/pair`)
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      sensorMacAddress: "11:22:33:44:55:77",
+      name: "Balcony Sensor",
+      type: "contact",
+      zone: "Balcony",
+    });
+  assert.equal(pairResponse.status, 201);
+  const sensorId = pairResponse.body.sensor.id as string;
+
+  const confirmResponse = await request(app)
+    .post("/api/device/hubs/sensors/confirm")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:40")
+    .set("x-hub-secret", hubSecret)
+    .send({ sensorMacAddress: "11:22:33:44:55:77" });
+  assert.equal(confirmResponse.status, 200);
+
+  const ws = openHubControlSocket("AA:BB:CC:DD:EE:40", hubSecret);
+
+  try {
+    await waitWsOpen(ws);
+
+    const sensorDeletePromise = nextWsJsonOfType(ws, "sensor_delete_command");
+    const deleteSensorResponse = await request(app)
+      .delete(`/api/homes/${homeId}/sensors/${sensorId}`)
+      .set("Authorization", `Bearer ${token}`);
+    assert.equal(deleteSensorResponse.status, 200);
+    assert.equal(deleteSensorResponse.body.deleted, true);
+    assert.equal(deleteSensorResponse.body.commandSent, true);
+
+    const sensorDeleteCommand = await sensorDeletePromise;
+    assert.equal(sensorDeleteCommand.type, "sensor_delete_command");
+    assert.equal(sensorDeleteCommand.sensorMacAddress, "11:22:33:44:55:77");
+
+    const hubResetPromise = nextWsJsonOfType(ws, "hub_reset_command");
+    const deleteHubResponse = await request(app)
+      .delete(`/api/homes/${homeId}`)
+      .set("Authorization", `Bearer ${token}`);
+    assert.equal(deleteHubResponse.status, 200);
+    assert.equal(deleteHubResponse.body.deleted, true);
+    assert.equal(deleteHubResponse.body.commandSent, true);
+
+    const hubResetCommand = await hubResetPromise;
+    assert.equal(hubResetCommand.type, "hub_reset_command");
+    assert.equal(hubResetCommand.action, "format_and_reset");
+    assert.equal(hubResetCommand.reason, "hub_deleted");
+    assert.equal(hubResetCommand.hubMacAddress, "AA:BB:CC:DD:EE:40");
+  } finally {
+    ws.close();
+  }
 });
 
 test("webRTC live feed signaling uses the existing hub control WebSocket", async () => {

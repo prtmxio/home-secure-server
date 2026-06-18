@@ -33,6 +33,15 @@ node_test_1.default.before(async () => {
         jwtExpiresIn: "1d",
         deviceApiKey: "device-test-key",
         pairingSessionTtlSeconds: 60,
+        metaWhatsappPhoneNumberId: "",
+        metaWhatsappToken: "",
+        metaWhatsappApiVersion: "v22.0",
+        whatsappOtpTemplateName: "login_otp",
+        whatsappCountryCode: "91",
+        firebaseServiceAccountJson: "",
+        firebaseProjectId: "",
+        firebaseClientEmail: "",
+        firebasePrivateKey: "",
         projectRoot: process.cwd(),
     };
     realtimeServices = (0, app_1.createRealtimeServices)();
@@ -119,7 +128,19 @@ node_test_1.default.afterEach(async () => {
     });
     strict_1.default.equal(sensorClaimResponse.status, 201);
     strict_1.default.equal(sensorClaimResponse.body.provisioning.sensor.targetHubMacAddress, "AA:BB:CC:DD:EE:FF");
-    const finalEventResponse = await (0, supertest_1.default)(app)
+    const pendingHomeDetailsResponse = await (0, supertest_1.default)(app)
+        .get(`/api/homes/${homeId}`)
+        .set("Authorization", `Bearer ${token}`);
+    strict_1.default.equal(pendingHomeDetailsResponse.status, 200);
+    strict_1.default.equal(pendingHomeDetailsResponse.body.home.sensors.length, 0);
+    const pendingHubSensorsResponse = await (0, supertest_1.default)(app)
+        .get("/api/device/hubs/sensors")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+        .set("x-hub-secret", currentHub.deviceSecret);
+    strict_1.default.equal(pendingHubSensorsResponse.status, 200);
+    strict_1.default.equal(pendingHubSensorsResponse.body.sensors.length, 0);
+    const preConfirmEventResponse = await (0, supertest_1.default)(app)
         .post("/api/device/hubs/events")
         .set("x-device-api-key", "device-test-key")
         .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
@@ -127,14 +148,52 @@ node_test_1.default.afterEach(async () => {
         .send({
         sensorMacAddress: "11:22:33:44:55:66",
         eventType: "motion_detected",
-        severity: "critical",
+    });
+    strict_1.default.equal(preConfirmEventResponse.status, 409);
+    const confirmSensorResponse = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/sensors/confirm")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+        .set("x-hub-secret", currentHub.deviceSecret)
+        .send({
+        sensorMacAddress: "11:22:33:44:55:66",
+    });
+    strict_1.default.equal(confirmSensorResponse.status, 200);
+    strict_1.default.equal(confirmSensorResponse.body.paired, true);
+    const finalEventResponse = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/events")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+        .set("x-hub-secret", currentHub.deviceSecret)
+        .send({
+        sensorMacAddress: "11:22:33:44:55:66",
+        eventType: "door_opened",
         payload: {
-            co2Ppm: 610,
-            humidity: 54,
+            module: "magnetic_reed",
+            reedState: "open",
         },
     });
     strict_1.default.equal(finalEventResponse.status, 201);
-    strict_1.default.equal(finalEventResponse.body.notification.eventType, "motion_detected");
+    strict_1.default.equal(finalEventResponse.body.notification.eventType, "door_opened");
+    strict_1.default.equal(finalEventResponse.body.notification.title, "Door opened");
+    strict_1.default.equal(finalEventResponse.body.notification.severity, "critical");
+    const shockEventResponse = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/events")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:FF")
+        .set("x-hub-secret", currentHub.deviceSecret)
+        .send({
+        sensorMacAddress: "11:22:33:44:55:66",
+        eventType: "shock_detected",
+        payload: {
+            module: "vibration",
+            shockFound: true,
+        },
+    });
+    strict_1.default.equal(shockEventResponse.status, 201);
+    strict_1.default.equal(shockEventResponse.body.notification.eventType, "shock_detected");
+    strict_1.default.equal(shockEventResponse.body.notification.title, "Shock detected");
+    strict_1.default.equal(shockEventResponse.body.notification.severity, "critical");
     const homeDetailsResponse = await (0, supertest_1.default)(app)
         .get(`/api/homes/${homeId}`)
         .set("Authorization", `Bearer ${token}`);
@@ -145,7 +204,7 @@ node_test_1.default.afterEach(async () => {
         .get("/api/notifications")
         .set("Authorization", `Bearer ${token}`);
     strict_1.default.equal(notificationsResponse.status, 200);
-    strict_1.default.equal(notificationsResponse.body.notifications.length, 1);
+    strict_1.default.equal(notificationsResponse.body.notifications.length, 2);
     strict_1.default.equal(notificationsResponse.body.notifications[0].severity, "critical");
 });
 (0, node_test_1.default)("otp flow registers first-time users and authenticates existing users", async () => {
@@ -153,10 +212,10 @@ node_test_1.default.afterEach(async () => {
         phoneNumber: "+919999999999",
     });
     strict_1.default.equal(requestOtpResponse.status, 200);
-    strict_1.default.equal(requestOtpResponse.body.otp, "123456");
+    strict_1.default.match(requestOtpResponse.body.otp, /^\d{6}$/);
     const firstVerifyResponse = await (0, supertest_1.default)(app).post("/api/auth/otp/verify").send({
         phoneNumber: "+919999999999",
-        otp: "123456",
+        otp: requestOtpResponse.body.otp,
     });
     strict_1.default.equal(firstVerifyResponse.status, 200);
     strict_1.default.equal(firstVerifyResponse.body.status, "registration_required");
@@ -170,16 +229,30 @@ node_test_1.default.afterEach(async () => {
     strict_1.default.equal(completeResponse.status, 201);
     strict_1.default.ok(completeResponse.body.token);
     strict_1.default.equal(completeResponse.body.user.email, "abc@gmail.com");
-    await (0, supertest_1.default)(app).post("/api/auth/otp/request").send({
+    const secondRequestOtpResponse = await (0, supertest_1.default)(app).post("/api/auth/otp/request").send({
         phoneNumber: "+919999999999",
     });
+    strict_1.default.equal(secondRequestOtpResponse.status, 200);
+    strict_1.default.match(secondRequestOtpResponse.body.otp, /^\d{6}$/);
     const secondVerifyResponse = await (0, supertest_1.default)(app).post("/api/auth/otp/verify").send({
         phoneNumber: "+919999999999",
-        otp: "123456",
+        otp: secondRequestOtpResponse.body.otp,
     });
     strict_1.default.equal(secondVerifyResponse.status, 200);
     strict_1.default.equal(secondVerifyResponse.body.status, "authenticated");
     strict_1.default.ok(secondVerifyResponse.body.token);
+});
+(0, node_test_1.default)("authenticated users can register mobile push tokens", async () => {
+    const { token } = await onboardHub("Push User", "push@example.com", "AA:BB:CC:DD:EE:11");
+    const response = await (0, supertest_1.default)(app)
+        .post("/api/notifications/push-token")
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+        token: "fcm-test-token",
+        platform: "android",
+    });
+    strict_1.default.equal(response.status, 200);
+    strict_1.default.equal(response.body.registered, true);
 });
 (0, node_test_1.default)("hub can upload camera frames and user can mint a short-lived stream token", async () => {
     const { token, homeId, hubSecret } = await onboardHub("Camera User", "camera@example.com", "AA:BB:CC:DD:EE:10");
@@ -251,6 +324,56 @@ node_test_1.default.afterEach(async () => {
         .set("Authorization", `Bearer ${token}`)
         .send({ state: "on", durationMs: 10001 });
     strict_1.default.equal(response.status, 400);
+});
+(0, node_test_1.default)("deleting sensors and hubs sends cleanup commands over hub WebSocket", async () => {
+    const { token, homeId, hubSecret } = await onboardHub("Delete User", "delete@example.com", "AA:BB:CC:DD:EE:40");
+    const pairResponse = await (0, supertest_1.default)(app)
+        .post(`/api/homes/${homeId}/sensors/pair`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+        sensorMacAddress: "11:22:33:44:55:77",
+        name: "Balcony Sensor",
+        type: "contact",
+        zone: "Balcony",
+    });
+    strict_1.default.equal(pairResponse.status, 201);
+    const sensorId = pairResponse.body.sensor.id;
+    const confirmResponse = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/sensors/confirm")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:40")
+        .set("x-hub-secret", hubSecret)
+        .send({ sensorMacAddress: "11:22:33:44:55:77" });
+    strict_1.default.equal(confirmResponse.status, 200);
+    const ws = openHubControlSocket("AA:BB:CC:DD:EE:40", hubSecret);
+    try {
+        await waitWsOpen(ws);
+        const sensorDeletePromise = nextWsJsonOfType(ws, "sensor_delete_command");
+        const deleteSensorResponse = await (0, supertest_1.default)(app)
+            .delete(`/api/homes/${homeId}/sensors/${sensorId}`)
+            .set("Authorization", `Bearer ${token}`);
+        strict_1.default.equal(deleteSensorResponse.status, 200);
+        strict_1.default.equal(deleteSensorResponse.body.deleted, true);
+        strict_1.default.equal(deleteSensorResponse.body.commandSent, true);
+        const sensorDeleteCommand = await sensorDeletePromise;
+        strict_1.default.equal(sensorDeleteCommand.type, "sensor_delete_command");
+        strict_1.default.equal(sensorDeleteCommand.sensorMacAddress, "11:22:33:44:55:77");
+        const hubResetPromise = nextWsJsonOfType(ws, "hub_reset_command");
+        const deleteHubResponse = await (0, supertest_1.default)(app)
+            .delete(`/api/homes/${homeId}`)
+            .set("Authorization", `Bearer ${token}`);
+        strict_1.default.equal(deleteHubResponse.status, 200);
+        strict_1.default.equal(deleteHubResponse.body.deleted, true);
+        strict_1.default.equal(deleteHubResponse.body.commandSent, true);
+        const hubResetCommand = await hubResetPromise;
+        strict_1.default.equal(hubResetCommand.type, "hub_reset_command");
+        strict_1.default.equal(hubResetCommand.action, "format_and_reset");
+        strict_1.default.equal(hubResetCommand.reason, "hub_deleted");
+        strict_1.default.equal(hubResetCommand.hubMacAddress, "AA:BB:CC:DD:EE:40");
+    }
+    finally {
+        ws.close();
+    }
 });
 (0, node_test_1.default)("webRTC live feed signaling uses the existing hub control WebSocket", async () => {
     const { token, hubId, hubSecret } = await onboardHub("Door Viewer", "door-viewer@example.com", "AA:BB:CC:DD:EE:01");

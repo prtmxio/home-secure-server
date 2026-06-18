@@ -16,6 +16,10 @@ class NotificationController {
         const notification = await this.notificationService.markAsRead(req.user.id, req.params.notificationId);
         res.status(200).json({ notification });
     });
+    registerPushToken = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        await this.notificationService.registerPushToken(req.user.id, req.body.token, req.body.platform);
+        res.status(200).json({ registered: true });
+    });
     streamNotifications = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const userId = req.user.id;
         res.writeHead(200, {

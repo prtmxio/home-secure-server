@@ -11,3 +11,9 @@ export interface CompleteHubRegistrationInput {
   hubMacAddress: string;
   provisioningToken: string;
 }
+
+export interface ConfirmSensorPairingInput {
+  hubMacAddress: string;
+  hubSecret: string;
+  sensorMacAddress: string;
+}

@@ -17,6 +17,7 @@ import { HomeService } from "./modules/homes/home.service";
 import { sendCameraStreamCommandForHome } from "./modules/device-control/hub-control-ws";
 import { NotificationController } from "./modules/notifications/notification.controller";
 import { NotificationService } from "./modules/notifications/notification.service";
+import { PushNotificationService } from "./modules/push-notifications/push-notification.service";
 
 export interface RealtimeServices {
   cameraRelay: CameraRelay;
@@ -37,9 +38,10 @@ export function createApp(config: AppConfig = env, realtimeServices: RealtimeSer
   const app = express();
 
   const { cameraRelay, doorLockService } = realtimeServices;
+  const pushNotificationService = new PushNotificationService(config);
   const authService = new AuthService(config);
   const homeService = new HomeService(config);
-  const notificationService = new NotificationService();
+  const notificationService = new NotificationService(pushNotificationService);
   const deviceService = new DeviceService(notificationService, homeService, cameraRelay);
 
   const authController = new AuthController(authService, homeService);

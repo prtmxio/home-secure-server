@@ -84,7 +84,29 @@ JWT_SECRET=replace-this
 JWT_EXPIRES_IN=7d
 DEVICE_API_KEY=replace-this-too
 PAIRING_SESSION_TTL_SECONDS=60
+META_WHATSAPP_PHONE_NUMBER_ID=your-meta-phone-number-id
+META_WHATSAPP_TOKEN=your-meta-permanent-or-temporary-access-token
+META_WHATSAPP_API_VERSION=v22.0
+WHATSAPP_OTP_TEMPLATE_NAME=login_otp
+WHATSAPP_COUNTRY_CODE=91
+FIREBASE_SERVICE_ACCOUNT_JSON=
+FIREBASE_PROJECT_ID=
+FIREBASE_CLIENT_EMAIL=
+FIREBASE_PRIVATE_KEY=
 ```
+
+OTP login generates a fresh six digit OTP for every request. In production the
+server sends it through the Meta WhatsApp Cloud API using the `login_otp`
+template. In non-production, the OTP is also returned in the API response so
+local tests and development can verify login without WhatsApp credentials.
+
+For mobile push notifications, configure Firebase Admin using either:
+
+- `FIREBASE_SERVICE_ACCOUNT_JSON`: full Firebase service account JSON string
+- or `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`
+
+If Firebase credentials are missing, the backend still stores in-app
+notifications but skips OS-level push delivery.
 
 ## Run
 
@@ -341,7 +363,7 @@ When the hub or one of its frame sensors detects activity, the hub sends an even
 
 - `POST /api/device/hubs/events`
 
-Example:
+Magnetic reed module example for door opening:
 
 ```bash
 curl -X POST http://localhost:3000/api/device/hubs/events \
@@ -351,11 +373,28 @@ curl -X POST http://localhost:3000/api/device/hubs/events \
   -H "Content-Type: application/json" \
   -d '{
     "sensorMacAddress":"11:22:33:44:55:66",
-    "eventType":"motion_detected",
-    "severity":"critical",
+    "eventType":"door_opened",
     "payload":{
-      "humidity":54,
-      "co2Ppm":610
+      "module":"magnetic_reed",
+      "reedState":"open"
+    }
+  }'
+```
+
+Vibration module example for shock found:
+
+```bash
+curl -X POST http://localhost:3000/api/device/hubs/events \
+  -H "X-Device-Api-Key: <DEVICE_API_KEY>" \
+  -H "X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF" \
+  -H "X-Hub-Secret: <HUB_DEVICE_SECRET>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sensorMacAddress":"11:22:33:44:55:66",
+    "eventType":"shock_detected",
+    "payload":{
+      "module":"vibration",
+      "shockFound":true
     }
   }'
 ```
@@ -366,7 +405,14 @@ The backend:
 - finds the home hub
 - finds the sensor under that hub
 - stores an activity log
-- creates a user notification
+- creates a realtime user notification in the mobile app
+
+Known sensor event types:
+
+- `door_opened`: magnetic reed module detected door opening. Defaults to
+  `critical` severity.
+- `shock_detected`: vibration module detected shock. Defaults to `critical`
+  severity.
 
 ## Step 12. Mobile app receives notifications
 
@@ -378,6 +424,24 @@ For real-time stream:
 
 - `GET /api/notifications/stream`
 
+For mobile push notifications, the Flutter app registers its Firebase Cloud
+Messaging token:
+
+```http
+POST /api/notifications/push-token
+Authorization: Bearer <USER_JWT>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "token": "<FCM_DEVICE_TOKEN>",
+  "platform": "android"
+}
+```
+
 To mark read:
 
 - `PATCH /api/notifications/:notificationId/read`
@@ -387,6 +451,17 @@ This allows the app to show:
 - live alerts when a door or window sensor is triggered
 - previous notifications
 - read/unread state
+- OS-level push popups when the app is closed or in background, if Firebase is
+  configured
+
+Firebase mobile setup required:
+
+- Android app must include `android/app/google-services.json`.
+- Android Gradle should apply the Google Services plugin after the Firebase
+  file is added.
+- Backend must have Firebase Admin credentials in `.env`.
+- Events like `door_opened` and `shock_detected` create both in-app
+  notifications and FCM push notifications.
 
 ## Step 13. ESP32 streams main door live feed with WebRTC
 
@@ -783,6 +858,7 @@ Recommended hub behavior:
 - send ACKs for commands received on this socket
 - treat this as the only persistent hub WebSocket
 - do not open a separate live-feed WebSocket as the hub
+- handle cleanup commands for deleted sensors and deleted hubs
 
 ### 3. Door lock command handling
 
@@ -894,8 +970,48 @@ Important:
 - Backend clears it after the hub fetches it.
 - Hub should send the provisioning data to the sensor over the chosen local
   protocol, for example ESP-NOW.
+- The sensor remains pending and hidden from app/hub sensor lists until the hub
+  confirms that the sensor connected successfully.
 
-### 6. Fetch paired sensor list
+### 6. Confirm sensor connected to hub
+
+After the hub has formed the local connection with the sensor, confirm it:
+
+```http
+POST /api/device/hubs/sensors/confirm
+X-Device-Api-Key: <DEVICE_API_KEY>
+X-Hub-Mac-Address: AA:BB:CC:DD:EE:FF
+X-Hub-Secret: <HUB_DEVICE_SECRET>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "sensorMacAddress": "11:22:33:44:55:66"
+}
+```
+
+Response:
+
+```json
+{
+  "paired": true,
+  "sensor": {
+    "sensorMacAddress": "11:22:33:44:55:66",
+    "name": "Front Door Frame Sensor",
+    "type": "contact",
+    "zone": "Front Door Frame",
+    "status": "paired"
+  }
+}
+```
+
+Only after this confirmation will the sensor appear in the mobile app and hub
+sensor list. Sensor activity events are rejected until confirmation succeeds.
+
+### 7. Fetch paired sensor list
 
 The hub can fetch all paired sensors:
 
@@ -922,7 +1038,91 @@ Response:
 }
 ```
 
-### 7. Send hub or sensor activity events
+### 8. Delete sensor
+
+When a user deletes a sensor from the mobile app, the app calls:
+
+```http
+DELETE /api/homes/<HOME_ID>/sensors/<SENSOR_ID>
+Authorization: Bearer <USER_JWT>
+```
+
+Response:
+
+```json
+{
+  "deleted": true,
+  "hubId": "<HUB_ID>",
+  "hubMacAddress": "AA:BB:CC:DD:EE:FF",
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "commandSent": true
+}
+```
+
+If the hub control WebSocket is connected, backend sends this message to the
+ESP32 hub:
+
+```json
+{
+  "type": "sensor_delete_command",
+  "sensorMacAddress": "11:22:33:44:55:66"
+}
+```
+
+ESP32 behavior:
+
+- remove this sensor MAC address from NVS/flash memory
+- stop accepting ESP-NOW/local packets from this sensor
+- remove any local encryption/provision keys for this sensor
+- continue running normally
+
+If `commandSent` is `false`, the sensor is still deleted from the backend, but
+the hub was offline and did not receive the cleanup command.
+
+### 9. Delete hub
+
+When a user deletes a hub from the mobile app, the app calls:
+
+```http
+DELETE /api/homes/<HOME_ID>
+Authorization: Bearer <USER_JWT>
+```
+
+Response:
+
+```json
+{
+  "deleted": true,
+  "hubId": "<HUB_ID>",
+  "hubMacAddress": "AA:BB:CC:DD:EE:FF",
+  "commandSent": true
+}
+```
+
+If the hub control WebSocket is connected, backend sends this message to the
+ESP32 hub:
+
+```json
+{
+  "type": "hub_reset_command",
+  "action": "format_and_reset",
+  "reason": "hub_deleted",
+  "hubMacAddress": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+ESP32 behavior:
+
+- erase hub secret from NVS/flash
+- erase Wi-Fi credentials if the firmware stores them for this product setup
+- erase paired sensors and local provision keys
+- clear camera/door-lock runtime state
+- restart into factory provisioning mode
+
+If `commandSent` is `false`, the hub/home is still deleted from the backend, but
+the hub was offline and did not receive the reset command.
+
+### 10. Send hub or sensor activity events
 
 When the hub or a paired sensor detects activity, call:
 
@@ -946,19 +1146,39 @@ Hub-level event:
 }
 ```
 
-Sensor event:
+Magnetic reed door-open event:
 
 ```json
 {
   "sensorMacAddress": "11:22:33:44:55:66",
-  "eventType": "motion_detected",
-  "severity": "critical",
+  "eventType": "door_opened",
   "payload": {
+    "module": "magnetic_reed",
+    "reedState": "open",
     "batteryPercent": 91,
     "rssi": -58
   }
 }
 ```
+
+Vibration shock event:
+
+```json
+{
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "eventType": "shock_detected",
+  "payload": {
+    "module": "vibration",
+    "shockFound": true,
+    "batteryPercent": 91,
+    "rssi": -58
+  }
+}
+```
+
+Both `door_opened` and `shock_detected` default to `critical` severity and
+create realtime mobile app notifications. The hub may still send an explicit
+`severity` if firmware wants to override the default.
 
 Response:
 
@@ -967,13 +1187,13 @@ Response:
   "activityLogId": "<ACTIVITY_LOG_ID>",
   "notification": {
     "id": "<NOTIFICATION_ID>",
-    "eventType": "motion_detected",
+    "eventType": "door_opened",
     "severity": "critical"
   }
 }
 ```
 
-### 8. Camera control command
+### 11. Camera control command
 
 When the first mobile viewer opens the camera stream, backend sends this on the
 same hub control WebSocket:
@@ -1125,6 +1345,8 @@ On every boot:
 6. Wait for `{ "type": "ready" }`.
 7. Process socket messages forever:
    - `door_lock_command`
+   - `sensor_delete_command`
+   - `hub_reset_command`
    - `camera_stream_command`
    - `viewer-ready`
    - `answer`

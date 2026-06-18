@@ -21,9 +21,13 @@ export function isHubControlConnected(hubId: string): boolean {
 }
 
 export function sendLiveFeedSignalToHub(hubId: string, payload: unknown): boolean {
+  return sendHubControlMessage(hubId, payload, "Live feed signal");
+}
+
+export function sendHubControlMessage(hubId: string, payload: unknown, label = "Hub command"): boolean {
   const hubSocket = socketsByHubId.get(hubId);
   if (!hubSocket || hubSocket.socket.readyState !== WebSocket.OPEN) {
-    console.warn(`[HUB_WS] Live feed signal not sent hub=${hubId} reason=no_control_socket`);
+    console.warn(`[HUB_WS] ${label} not sent hub=${hubId} reason=no_control_socket`);
     return false;
   }
 

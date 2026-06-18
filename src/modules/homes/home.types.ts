@@ -2,7 +2,6 @@ export interface StartHomeSetupInput {
   hubMacAddress: string;
   homeName: string;
   location?: string;
-  serialNumber?: string;
   hardwareModel?: string;
 }
 

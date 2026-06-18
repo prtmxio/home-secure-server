@@ -8,7 +8,6 @@ const hubSetupSessionSchema = new mongoose_1.Schema({
     homeName: { type: String, required: true, trim: true },
     location: { type: String, default: "", trim: true },
     provisioningToken: { type: String, required: true, index: true },
-    serialNumber: { type: String, default: null, trim: true },
     hardwareModel: { type: String, default: "ESP32-S3" },
     status: { type: String, enum: ["pending", "completed", "expired"], default: "pending" },
     expiresAt: { type: Date, required: true, index: true },

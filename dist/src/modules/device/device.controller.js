@@ -25,6 +25,14 @@ class DeviceController {
         });
         res.status(200).json(result);
     });
+    confirmSensorPairing = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.deviceService.confirmSensorPairing({
+            hubMacAddress: (req.headers["x-hub-mac-address"] || req.body.hubMacAddress),
+            hubSecret: (req.headers["x-hub-secret"] || req.body.hubSecret),
+            sensorMacAddress: req.body.sensorMacAddress,
+        });
+        res.status(200).json(result);
+    });
     fetchHubSensors = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const result = await this.deviceService.fetchHubSensors({
             hubMacAddress: (req.headers["x-hub-mac-address"] || ""),

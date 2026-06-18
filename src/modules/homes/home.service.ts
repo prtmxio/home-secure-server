@@ -47,7 +47,6 @@ export class HomeService {
       homeName: payload.homeName.trim(),
       location: String(payload.location || "").trim(),
       provisioningToken,
-      serialNumber: payload.serialNumber || null,
       hardwareModel: payload.hardwareModel || "ESP32-S3",
       status: "pending",
       expiresAt,
@@ -91,7 +90,6 @@ export class HomeService {
       hub = await HubModel.create({
         owner: session.user,
         macAddress: hubMacAddress,
-        serialNumber: session.serialNumber,
         name: `${session.homeName} Hub`,
         location: session.location,
         hardwareModel: session.hardwareModel,
@@ -103,7 +101,6 @@ export class HomeService {
       hub.owner = session.user;
       hub.name = `${session.homeName} Hub`;
       hub.location = session.location;
-      hub.serialNumber = session.serialNumber;
       hub.hardwareModel = session.hardwareModel;
       hub.status = "online";
       hub.lastSeenAt = new Date();
@@ -237,6 +234,9 @@ export class HomeService {
     if (existingSensor && existingSensor.hub.toString() !== hub.id) {
       throw new ApiError(409, "This sensor is already paired with another hub");
     }
+    if (existingSensor && existingSensor.status !== "provisioning") {
+      throw new ApiError(409, "This sensor is already paired with this hub");
+    }
 
     if (!existingSensor) {
       const sensorCount = await SensorModel.countDocuments({ hub: hub._id });
@@ -263,21 +263,19 @@ export class HomeService {
     // Cleared on the server once the hub has fetched it (one-time delivery).
     const provisionKey = crypto.randomBytes(16).toString("hex");
     sensor.provisionKey = provisionKey;
-    sensor.status = "provisioning";
-
     sensor.provisioning = {
       hubMacAddress: hub.macAddress,
       sensorMacAddress,
       sharedAt: new Date(),
     };
-    sensor.status = "paired";
+    sensor.status = "provisioning";
     await sensor.save();
 
     await ActivityLogModel.create({
       user: new Types.ObjectId(String(userId)),
       hub: hub._id,
       sensor: sensor._id,
-      eventType: "sensor_paired",
+      eventType: "sensor_pairing_requested",
       severity: "info",
       source: "mobile",
       payload: {
@@ -303,6 +301,97 @@ export class HomeService {
     };
   }
 
+  async deleteSensorFromHome(
+    userId: string | Types.ObjectId,
+    homeId: string,
+    sensorId: string,
+  ): Promise<{ deleted: true; hubId: string; hubMacAddress: string; sensorMacAddress: string }> {
+    const home = await HomeModel.findOne({
+      _id: homeId,
+      owner: userId,
+    }).populate("hub");
+    if (!home || !home.hub) {
+      throw new ApiError(404, "Home not found");
+    }
+
+    const hub = home.hub as unknown as IHub & {
+      _id: Types.ObjectId;
+      id: string;
+    };
+    const sensor = await SensorModel.findOne({
+      _id: sensorId,
+      hub: hub._id,
+    });
+    if (!sensor) {
+      throw new ApiError(404, "Sensor not found");
+    }
+
+    const sensorMacAddress = sensor.macAddress;
+    await sensor.deleteOne();
+
+    await ActivityLogModel.create({
+      user: new Types.ObjectId(String(userId)),
+      hub: hub._id,
+      eventType: "sensor_deleted",
+      severity: "info",
+      source: "mobile",
+      payload: {
+        homeId,
+        hubMacAddress: hub.macAddress,
+        sensorMacAddress,
+      },
+    });
+
+    return {
+      deleted: true,
+      hubId: hub.id || String(hub._id),
+      hubMacAddress: hub.macAddress,
+      sensorMacAddress,
+    };
+  }
+
+  async deleteHomeHub(
+    userId: string | Types.ObjectId,
+    homeId: string,
+  ): Promise<{ deleted: true; hubId: string; hubMacAddress: string }> {
+    const home = await HomeModel.findOne({
+      _id: homeId,
+      owner: userId,
+    }).populate("hub");
+    if (!home || !home.hub) {
+      throw new ApiError(404, "Home not found");
+    }
+
+    const hub = home.hub as unknown as IHub & {
+      _id: Types.ObjectId;
+      id: string;
+    };
+
+    await SensorModel.deleteMany({ hub: hub._id });
+    await SensorPairingSessionModel.deleteMany({ hub: hub._id });
+    await HubSetupSessionModel.deleteMany({ hubMacAddress: hub.macAddress });
+    await HomeModel.deleteOne({ _id: home._id });
+    await HubModel.deleteOne({ _id: hub._id });
+
+    await ActivityLogModel.create({
+      user: new Types.ObjectId(String(userId)),
+      hub: hub._id,
+      eventType: "hub_deleted",
+      severity: "info",
+      source: "mobile",
+      payload: {
+        homeId,
+        hubMacAddress: hub.macAddress,
+      },
+    });
+
+    return {
+      deleted: true,
+      hubId: hub.id || String(hub._id),
+      hubMacAddress: hub.macAddress,
+    };
+  }
+
   private async buildHomeDto(
     home: IHome & { _id?: Types.ObjectId; id?: string; hub?: unknown },
   ): Promise<HomeDto> {
@@ -310,7 +399,10 @@ export class HomeService {
       _id: Types.ObjectId;
       id: string;
     };
-    const sensors = await SensorModel.find({ hub: hub._id })
+    const sensors = await SensorModel.find({
+      hub: hub._id,
+      status: { $ne: "provisioning" },
+    })
       .sort({ createdAt: 1 })
       .lean();
 

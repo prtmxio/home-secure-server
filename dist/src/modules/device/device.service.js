@@ -56,9 +56,55 @@ class DeviceService {
         await sensor.save();
         return { sensorMacAddress, provisionKey };
     }
+    async confirmSensorPairing(payload) {
+        const hub = await this.authenticateHub(payload);
+        const sensorMacAddress = (0, mac_address_1.normalizeMacAddress)(payload.sensorMacAddress);
+        const sensor = await sensor_model_1.SensorModel.findOne({
+            hub: hub._id,
+            macAddress: sensorMacAddress,
+        });
+        if (!sensor) {
+            throw new api_error_1.ApiError(404, "Sensor not found for this hub");
+        }
+        const wasProvisioning = sensor.status === "provisioning";
+        sensor.status = "paired";
+        sensor.provisionKey = null;
+        sensor.lastActivityAt = new Date();
+        await sensor.save();
+        hub.lastSeenAt = new Date();
+        hub.status = "online";
+        await hub.save();
+        if (wasProvisioning) {
+            await activity_log_model_1.ActivityLogModel.create({
+                user: hub.owner,
+                hub: hub._id,
+                sensor: sensor._id,
+                eventType: "sensor_paired",
+                severity: "info",
+                source: "hub",
+                payload: {
+                    hubMacAddress: hub.macAddress,
+                    sensorMacAddress,
+                },
+            });
+        }
+        return {
+            paired: true,
+            sensor: {
+                sensorMacAddress: sensor.macAddress,
+                name: sensor.name,
+                type: sensor.type,
+                zone: sensor.zone,
+                status: sensor.status,
+            },
+        };
+    }
     async fetchHubSensors(payload) {
         const hub = await this.authenticateHub(payload);
-        const sensors = await sensor_model_1.SensorModel.find({ hub: hub._id }).sort({ createdAt: 1 });
+        const sensors = await sensor_model_1.SensorModel.find({
+            hub: hub._id,
+            status: { $ne: "provisioning" },
+        }).sort({ createdAt: 1 });
         return {
             sensors: sensors.map((sensor) => ({
                 sensorMacAddress: sensor.macAddress,
@@ -110,6 +156,9 @@ class DeviceService {
             if (!sensor) {
                 throw new api_error_1.ApiError(404, "Sensor not found for this hub");
             }
+            if (sensor.status === "provisioning") {
+                throw new api_error_1.ApiError(409, "Sensor pairing has not been confirmed by the hub");
+            }
             sensor.lastActivityAt = new Date();
             sensor.status = "online";
             await sensor.save();
@@ -117,12 +166,19 @@ class DeviceService {
         hub.lastSeenAt = new Date();
         hub.status = "online";
         await hub.save();
+        const severity = payload.severity || this.defaultSeverityForEvent(payload.eventType);
+        const notificationContent = this.notificationContentForEvent({
+            hubName: hub.name,
+            sensorName: sensor?.name || "",
+            sensorZone: sensor?.zone || "",
+            eventType: payload.eventType,
+        });
         const activityLog = await activity_log_model_1.ActivityLogModel.create({
             user: hub.owner,
             hub: hub._id,
             sensor: sensor?._id || null,
             eventType: payload.eventType,
-            severity: payload.severity || "info",
+            severity,
             source: sensor ? "sensor" : "hub",
             payload: payload.payload || {},
         });
@@ -132,11 +188,9 @@ class DeviceService {
             sensor: sensor?._id || null,
             activityLog: activityLog._id,
             eventType: payload.eventType,
-            severity: payload.severity || "info",
-            title: `${hub.name}: ${payload.eventType}`,
-            message: sensor
-                ? `${sensor.name}${sensor.zone ? ` (${sensor.zone})` : ""} reported ${payload.eventType}`
-                : `${hub.name} reported ${payload.eventType}`,
+            severity,
+            title: notificationContent.title,
+            message: notificationContent.message,
             deliveredAt: new Date(),
         });
         const populatedNotification = await notification_model_1.NotificationModel.findById(notification._id)
@@ -146,6 +200,35 @@ class DeviceService {
         return {
             activityLogId: activityLog.id,
             notification: this.notificationService.serialize(populatedNotification),
+        };
+    }
+    defaultSeverityForEvent(eventType) {
+        if (eventType === "door_opened" || eventType === "shock_detected") {
+            return "critical";
+        }
+        return "info";
+    }
+    notificationContentForEvent(payload) {
+        const sensorLabel = payload.sensorName
+            ? `${payload.sensorName}${payload.sensorZone ? ` (${payload.sensorZone})` : ""}`
+            : payload.hubName;
+        if (payload.eventType === "door_opened") {
+            return {
+                title: "Door opened",
+                message: `${sensorLabel} magnetic reed sensor detected door opening.`,
+            };
+        }
+        if (payload.eventType === "shock_detected") {
+            return {
+                title: "Shock detected",
+                message: `${sensorLabel} vibration sensor detected shock.`,
+            };
+        }
+        return {
+            title: `${payload.hubName}: ${payload.eventType}`,
+            message: payload.sensorName
+                ? `${sensorLabel} reported ${payload.eventType}`
+                : `${payload.hubName} reported ${payload.eventType}`,
         };
     }
     async authenticateHub(payload) {

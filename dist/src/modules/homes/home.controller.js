@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.HomeController = void 0;
 const async_handler_1 = require("../../common/utils/async-handler");
+const hub_control_ws_1 = require("../device-control/hub-control-ws");
 class HomeController {
     homeService;
     doorLockService;
@@ -26,6 +27,24 @@ class HomeController {
     pairSensor = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const result = await this.homeService.pairSensorToHome(req.user.id, req.params.homeId, req.body);
         res.status(201).json(result);
+    });
+    deleteSensor = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.homeService.deleteSensorFromHome(req.user.id, req.params.homeId, req.params.sensorId);
+        const commandSent = (0, hub_control_ws_1.sendHubControlMessage)(result.hubId, {
+            type: "sensor_delete_command",
+            sensorMacAddress: result.sensorMacAddress,
+        }, "Sensor delete command");
+        res.status(200).json({ ...result, commandSent });
+    });
+    deleteHub = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.homeService.deleteHomeHub(req.user.id, req.params.homeId);
+        const commandSent = (0, hub_control_ws_1.sendHubControlMessage)(result.hubId, {
+            type: "hub_reset_command",
+            action: "format_and_reset",
+            reason: "hub_deleted",
+            hubMacAddress: result.hubMacAddress,
+        }, "Hub reset command");
+        res.status(200).json({ ...result, commandSent });
     });
     openDoorLock = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const command = await this.doorLockService.createAutoLockCommand(req.user.id, req.params.homeId);

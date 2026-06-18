@@ -24,6 +24,7 @@ const home_service_1 = require("./modules/homes/home.service");
 const hub_control_ws_1 = require("./modules/device-control/hub-control-ws");
 const notification_controller_1 = require("./modules/notifications/notification.controller");
 const notification_service_1 = require("./modules/notifications/notification.service");
+const push_notification_service_1 = require("./modules/push-notifications/push-notification.service");
 function createRealtimeServices() {
     return {
         cameraRelay: new camera_relay_1.CameraRelay({
@@ -36,9 +37,10 @@ function createRealtimeServices() {
 function createApp(config = env_1.env, realtimeServices = createRealtimeServices()) {
     const app = (0, express_1.default)();
     const { cameraRelay, doorLockService } = realtimeServices;
+    const pushNotificationService = new push_notification_service_1.PushNotificationService(config);
     const authService = new auth_service_1.AuthService(config);
     const homeService = new home_service_1.HomeService(config);
-    const notificationService = new notification_service_1.NotificationService();
+    const notificationService = new notification_service_1.NotificationService(pushNotificationService);
     const deviceService = new device_service_1.DeviceService(notificationService, homeService, cameraRelay);
     const authController = new auth_controller_1.AuthController(authService, homeService);
     const homeController = new home_controller_1.HomeController(homeService, doorLockService, cameraRelay);

@@ -7,6 +7,7 @@ function createNotificationRoutes(notificationController, authMiddleware) {
     router.use(authMiddleware);
     router.get("/", notificationController.listNotifications);
     router.get("/stream", notificationController.streamNotifications);
+    router.post("/push-token", notificationController.registerPushToken);
     router.patch("/:notificationId/read", notificationController.markAsRead);
     return router;
 }

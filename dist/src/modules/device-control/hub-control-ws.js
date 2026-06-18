@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.isHubControlConnected = isHubControlConnected;
 exports.sendLiveFeedSignalToHub = sendLiveFeedSignalToHub;
+exports.sendHubControlMessage = sendHubControlMessage;
 exports.sendCameraStreamCommandForHome = sendCameraStreamCommandForHome;
 exports.attachHubControlWebSocket = attachHubControlWebSocket;
 const ws_1 = require("ws");
@@ -13,9 +14,12 @@ function isHubControlConnected(hubId) {
     return socketsByHubId.get(hubId)?.socket.readyState === ws_1.WebSocket.OPEN;
 }
 function sendLiveFeedSignalToHub(hubId, payload) {
+    return sendHubControlMessage(hubId, payload, "Live feed signal");
+}
+function sendHubControlMessage(hubId, payload, label = "Hub command") {
     const hubSocket = socketsByHubId.get(hubId);
     if (!hubSocket || hubSocket.socket.readyState !== ws_1.WebSocket.OPEN) {
-        console.warn(`[HUB_WS] Live feed signal not sent hub=${hubId} reason=no_control_socket`);
+        console.warn(`[HUB_WS] ${label} not sent hub=${hubId} reason=no_control_socket`);
         return false;
     }
     hubSocket.socket.send(JSON.stringify(payload));

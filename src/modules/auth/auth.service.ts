@@ -83,10 +83,11 @@ export class AuthService {
       throw new ApiError(400, "phoneNumber is required");
     }
 
-    const otp = this.config.nodeEnv === "production" ? String(crypto.randomInt(100000, 999999)) : "123456";
-    console.log(otp)
+    const otp = String(crypto.randomInt(100000, 1000000));
     const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
     otpStore.set(phoneNumber, { phoneNumber, otp, expiresAt });
+
+    await this.sendLoginOtp(otp, phoneNumber);
 
     return { phoneNumber, otp, expiresAt };
   }
@@ -184,6 +185,83 @@ export class AuthService {
   }
 
   private normalizePhone(phoneNumber: string): string {
-    return String(phoneNumber || "").trim().replace(/\s+/g, "");
+    return String(phoneNumber || "").replace(/\D/g, "");
+  }
+
+  private whatsappRecipient(phoneNumber: string): string {
+    const normalized = this.normalizePhone(phoneNumber);
+    const countryCode = this.config.whatsappCountryCode.replace(/\D/g, "") || "91";
+    if (normalized.length === 10) {
+      return `${countryCode}${normalized}`;
+    }
+    return normalized;
+  }
+
+  private async sendLoginOtp(otp: string, phoneNumber: string): Promise<void> {
+    const phoneNumberId = this.config.metaWhatsappPhoneNumberId;
+    const token = this.config.metaWhatsappToken;
+
+    if (!phoneNumberId || !token) {
+      if (this.config.nodeEnv === "production") {
+        throw new ApiError(500, "WhatsApp OTP provider is not configured");
+      }
+      console.log("Skipping WhatsApp OTP send; Meta credentials are not configured", {
+        phoneNumber,
+        otp,
+      });
+      return;
+    }
+
+    const response = await fetch(
+      `https://graph.facebook.com/${this.config.metaWhatsappApiVersion}/${phoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: this.whatsappRecipient(phoneNumber),
+          type: "template",
+          template: {
+            name: this.config.whatsappOtpTemplateName,
+            language: {
+              code: "en",
+            },
+            components: [
+              {
+                type: "body",
+                parameters: [
+                  {
+                    type: "text",
+                    text: otp,
+                  },
+                ],
+              },
+              {
+                type: "button",
+                sub_type: "url",
+                index: "0",
+                parameters: [
+                  {
+                    type: "text",
+                    text: otp,
+                  },
+                ],
+              },
+            ],
+          },
+        }),
+      },
+    );
+
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("Failed to send WhatsApp OTP", body);
+      throw new ApiError(502, "Failed to send OTP on WhatsApp");
+    }
+
+    console.log("WhatsApp OTP sent", body);
   }
 }

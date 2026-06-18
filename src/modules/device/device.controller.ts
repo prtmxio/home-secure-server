@@ -26,6 +26,15 @@ export class DeviceController {
     res.status(200).json(result);
   });
 
+  confirmSensorPairing = asyncHandler(async (req: Request, res: Response) => {
+    const result = await this.deviceService.confirmSensorPairing({
+      hubMacAddress: (req.headers["x-hub-mac-address"] || req.body.hubMacAddress) as string,
+      hubSecret: (req.headers["x-hub-secret"] || req.body.hubSecret) as string,
+      sensorMacAddress: req.body.sensorMacAddress as string,
+    });
+    res.status(200).json(result);
+  });
+
   fetchHubSensors = asyncHandler(async (req: Request, res: Response) => {
     const result = await this.deviceService.fetchHubSensors({
       hubMacAddress: (req.headers["x-hub-mac-address"] || "") as string,
