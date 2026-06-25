@@ -71,6 +71,21 @@ export class NotificationService {
     await user.save();
   }
 
+  async unregisterPushToken(
+    userId: string | Types.ObjectId,
+    token: string,
+  ): Promise<void> {
+    const trimmedToken = String(token || "").trim();
+    if (!trimmedToken) {
+      throw new ApiError(400, "Push token is required");
+    }
+
+    await UserModel.updateOne(
+      { _id: userId },
+      { $pull: { pushTokens: { token: trimmedToken } } },
+    );
+  }
+
   serialize(notification: any): NotificationDto {
     return {
       id: notification.id || String(notification._id),

@@ -174,6 +174,21 @@ The mobile app sends over BLE:
 - Wi-Fi password
 - provisioning token received from backend
 
+BLE wire format:
+
+```json
+{
+  "type": "hub_wifi_provision",
+  "ssid": "<WIFI_SSID>",
+  "passwd": "<WIFI_PASSWORD>",
+  "token": "<PROVISIONING_TOKEN>"
+}
+```
+
+The Flutter app writes this as UTF-8 JSON followed by `\n`. It may arrive in
+multiple BLE chunks, so ESP32 firmware should append incoming bytes until it
+receives newline, then parse the complete JSON object.
+
 The backend does not need the Wi-Fi password. That stays between the mobile app and the hub.
 
 ## Step 4. Mobile app starts a temporary BLE setup session with backend
@@ -425,7 +440,7 @@ For real-time stream:
 - `GET /api/notifications/stream`
 
 For mobile push notifications, the Flutter app registers its Firebase Cloud
-Messaging token:
+Messaging token after login/session restore:
 
 ```http
 POST /api/notifications/push-token
@@ -439,6 +454,23 @@ Request:
 {
   "token": "<FCM_DEVICE_TOKEN>",
   "platform": "android"
+}
+```
+
+When the user logs out, the app removes the current device token from that
+user:
+
+```http
+DELETE /api/notifications/push-token
+Authorization: Bearer <USER_JWT>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "token": "<FCM_DEVICE_TOKEN>"
 }
 ```
 
@@ -942,6 +974,20 @@ Response:
 ```
 
 After this, the mobile app can scan a sensor QR and pair it to this hub.
+
+The mobile app then connects to the sensor over BLE and sends:
+
+```json
+{
+  "type": "sensor_pair",
+  "hub_mac": "<HUB_MAC_ADDRESS>",
+  "prov_key": "<SENSOR_PROVISION_KEY>"
+}
+```
+
+The Flutter app writes this as UTF-8 JSON followed by `\n`. It may arrive in
+multiple BLE chunks, so sensor firmware should append incoming bytes until it
+receives newline, then parse the complete JSON object.
 
 ### 5. Fetch pending sensor provisioning
 

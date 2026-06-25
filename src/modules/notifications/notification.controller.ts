@@ -28,6 +28,14 @@ export class NotificationController {
     res.status(200).json({ registered: true });
   });
 
+  unregisterPushToken = asyncHandler(async (req: Request, res: Response) => {
+    await this.notificationService.unregisterPushToken(
+      req.user!.id,
+      req.body.token,
+    );
+    res.status(200).json({ unregistered: true });
+  });
+
   streamNotifications = asyncHandler(async (req: Request, res: Response) => {
     const userId = req.user!.id;
 

@@ -20,6 +20,10 @@ class NotificationController {
         await this.notificationService.registerPushToken(req.user.id, req.body.token, req.body.platform);
         res.status(200).json({ registered: true });
     });
+    unregisterPushToken = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        await this.notificationService.unregisterPushToken(req.user.id, req.body.token);
+        res.status(200).json({ unregistered: true });
+    });
     streamNotifications = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const userId = req.user.id;
         res.writeHead(200, {

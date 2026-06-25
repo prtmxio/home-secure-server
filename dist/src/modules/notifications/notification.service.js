@@ -58,6 +58,13 @@ class NotificationService {
         }
         await user.save();
     }
+    async unregisterPushToken(userId, token) {
+        const trimmedToken = String(token || "").trim();
+        if (!trimmedToken) {
+            throw new api_error_1.ApiError(400, "Push token is required");
+        }
+        await user_model_1.UserModel.updateOne({ _id: userId }, { $pull: { pushTokens: { token: trimmedToken } } });
+    }
     serialize(notification) {
         return {
             id: notification.id || String(notification._id),
