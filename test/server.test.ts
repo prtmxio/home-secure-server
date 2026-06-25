@@ -49,7 +49,12 @@ test.before(async () => {
   realtimeServices = createRealtimeServices();
   app = createApp(testConfig, realtimeServices);
   httpServer = http.createServer(app);
-  attachHubControlWebSocket(httpServer, testConfig, realtimeServices.doorLockService);
+  attachHubControlWebSocket(
+    httpServer,
+    testConfig,
+    realtimeServices.doorLockService,
+    realtimeServices.ingestHubEvent,
+  );
   attachLiveFeedServer(httpServer, testConfig, {
     isDeviceConnected: isHubControlConnected,
     sendToDevice: sendLiveFeedSignalToHub,
@@ -420,6 +425,59 @@ test("deleting sensors and hubs sends cleanup commands over hub WebSocket", asyn
     assert.equal(hubResetCommand.action, "format_and_reset");
     assert.equal(hubResetCommand.reason, "hub_deleted");
     assert.equal(hubResetCommand.hubMacAddress, "AA:BB:CC:DD:EE:40");
+  } finally {
+    ws.close();
+  }
+});
+
+test("hub control WebSocket events create user notifications", async () => {
+  const { token, homeId, hubSecret } = await onboardHub(
+    "Socket Event User",
+    "socket-event@example.com",
+    "AA:BB:CC:DD:EE:55",
+  );
+
+  const pairResponse = await request(app)
+    .post(`/api/homes/${homeId}/sensors/pair`)
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      sensorMacAddress: "11:22:33:44:55:88",
+      name: "Main Door Sensor",
+      type: "contact",
+      zone: "Main Door",
+    });
+  assert.equal(pairResponse.status, 201);
+
+  const confirmResponse = await request(app)
+    .post("/api/device/hubs/sensors/confirm")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:55")
+    .set("x-hub-secret", hubSecret)
+    .send({ sensorMacAddress: "11:22:33:44:55:88" });
+  assert.equal(confirmResponse.status, 200);
+
+  const ws = openHubControlSocket("AA:BB:CC:DD:EE:55", hubSecret);
+  try {
+    await waitWsOpen(ws);
+
+    ws.send(JSON.stringify({
+      type: "sensor_event",
+      eventType: "door_opened",
+      sensorMacAddress: "11:22:33:44:55:88",
+      payload: { reedState: "open" },
+    }));
+
+    const ack = await nextWsJsonOfType(ws, "hub_event_ack");
+    assert.equal(ack.eventType, "door_opened");
+    assert.equal((ack.notification as { eventType?: string }).eventType, "door_opened");
+
+    const notificationsResponse = await request(app)
+      .get("/api/notifications")
+      .set("Authorization", `Bearer ${token}`);
+    assert.equal(notificationsResponse.status, 200);
+    assert.equal(notificationsResponse.body.notifications.length, 1);
+    assert.equal(notificationsResponse.body.notifications[0].eventType, "door_opened");
+    assert.equal(notificationsResponse.body.notifications[0].title, "Door opened");
   } finally {
     ws.close();
   }

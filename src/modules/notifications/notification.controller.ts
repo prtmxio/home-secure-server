@@ -19,6 +19,19 @@ export class NotificationController {
     res.status(200).json({ notification });
   });
 
+  deleteNotification = asyncHandler(async (req: Request, res: Response) => {
+    await this.notificationService.deleteForUser(
+      req.user!.id,
+      req.params.notificationId as string,
+    );
+    res.status(200).json({ deleted: true });
+  });
+
+  clearNotifications = asyncHandler(async (req: Request, res: Response) => {
+    const result = await this.notificationService.clearForUser(req.user!.id);
+    res.status(200).json({ cleared: true, deletedCount: result.deletedCount });
+  });
+
   registerPushToken = asyncHandler(async (req: Request, res: Response) => {
     await this.notificationService.registerPushToken(
       req.user!.id,

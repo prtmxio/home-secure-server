@@ -33,6 +33,18 @@ export class NotificationService {
     return this.serialize(notification);
   }
 
+  async deleteForUser(userId: string | Types.ObjectId, notificationId: string): Promise<void> {
+    const result = await NotificationModel.deleteOne({ _id: notificationId, user: userId });
+    if (result.deletedCount === 0) {
+      throw new ApiError(404, "Notification not found");
+    }
+  }
+
+  async clearForUser(userId: string | Types.ObjectId): Promise<{ deletedCount: number }> {
+    const result = await NotificationModel.deleteMany({ user: userId });
+    return { deletedCount: result.deletedCount || 0 };
+  }
+
   publishRealtime(notification: unknown): void {
     const payload = this.serialize(notification);
     notificationBroker.publish(payload.userId, "notification", payload);

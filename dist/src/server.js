@@ -14,7 +14,7 @@ async function bootstrap() {
     const realtimeServices = (0, app_1.createRealtimeServices)();
     const app = (0, app_1.createApp)(env_1.env, realtimeServices);
     const server = http_1.default.createServer(app);
-    (0, hub_control_ws_1.attachHubControlWebSocket)(server, env_1.env, realtimeServices.doorLockService);
+    (0, hub_control_ws_1.attachHubControlWebSocket)(server, env_1.env, realtimeServices.doorLockService, realtimeServices.ingestHubEvent);
     (0, live_feed_server_1.attachLiveFeedServer)(server, env_1.env, {
         isDeviceConnected: hub_control_ws_1.isHubControlConnected,
         sendToDevice: hub_control_ws_1.sendLiveFeedSignalToHub,

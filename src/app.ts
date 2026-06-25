@@ -11,6 +11,7 @@ import { CameraController } from "./modules/camera/camera.controller";
 import { CameraRelay } from "./modules/camera/camera-relay";
 import { DeviceController } from "./modules/device/device.controller";
 import { DeviceService } from "./modules/device/device.service";
+import { DeviceEventInput } from "./modules/device/device.types";
 import { DoorLockService } from "./modules/door-lock/door-lock.service";
 import { HomeController } from "./modules/homes/home.controller";
 import { HomeService } from "./modules/homes/home.service";
@@ -22,6 +23,7 @@ import { PushNotificationService } from "./modules/push-notifications/push-notif
 export interface RealtimeServices {
   cameraRelay: CameraRelay;
   doorLockService: DoorLockService;
+  ingestHubEvent?: (payload: DeviceEventInput) => Promise<unknown>;
 }
 
 export function createRealtimeServices(): RealtimeServices {
@@ -43,6 +45,7 @@ export function createApp(config: AppConfig = env, realtimeServices: RealtimeSer
   const homeService = new HomeService(config);
   const notificationService = new NotificationService(pushNotificationService);
   const deviceService = new DeviceService(notificationService, homeService, cameraRelay);
+  realtimeServices.ingestHubEvent = (payload) => deviceService.ingestHubEvent(payload);
 
   const authController = new AuthController(authService, homeService);
   const homeController = new HomeController(homeService, doorLockService, cameraRelay);

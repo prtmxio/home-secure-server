@@ -42,6 +42,7 @@ function createApp(config = env_1.env, realtimeServices = createRealtimeServices
     const homeService = new home_service_1.HomeService(config);
     const notificationService = new notification_service_1.NotificationService(pushNotificationService);
     const deviceService = new device_service_1.DeviceService(notificationService, homeService, cameraRelay);
+    realtimeServices.ingestHubEvent = (payload) => deviceService.ingestHubEvent(payload);
     const authController = new auth_controller_1.AuthController(authService, homeService);
     const homeController = new home_controller_1.HomeController(homeService, doorLockService, cameraRelay);
     const deviceController = new device_controller_1.DeviceController(deviceService);

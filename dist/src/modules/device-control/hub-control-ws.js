@@ -54,7 +54,7 @@ async function sendCameraStreamCommandForHome(homeId, action, streamSessionId = 
     }
     return true;
 }
-function attachHubControlWebSocket(server, config, doorLockService) {
+function attachHubControlWebSocket(server, config, doorLockService, ingestHubEvent) {
     const wss = new ws_1.WebSocketServer({ noServer: true });
     doorLockService.onCommand((command) => {
         const hubSocket = socketsByHubId.get(command.hubId);
@@ -89,11 +89,11 @@ function attachHubControlWebSocket(server, config, doorLockService) {
                     console.warn(`[HUB_WS] Replacing existing control websocket hub=${hubId} mac=${hubMacAddress}`);
                     existingSocket.socket.close(4000, "Replaced by a new control connection");
                 }
-                socketsByHubId.set(hubId, { hubId, hubMacAddress, socket: ws });
+                socketsByHubId.set(hubId, { hubId, hubMacAddress, hubSecret, socket: ws });
                 console.info(`[HUB_WS] Control websocket connected hub=${hubId} mac=${hubMacAddress}`);
                 (0, live_feed_server_1.broadcastLiveFeedStatus)(hubId, "live");
                 ws.on("message", (data) => {
-                    void handleHubMessage(doorLockService, hubId, ws, data);
+                    void handleHubMessage(doorLockService, hubId, hubMacAddress, hubSecret, ws, data, ingestHubEvent);
                 });
                 ws.on("close", (code, reason) => {
                     console.info(`[HUB_WS] Control websocket closed hub=${hubId} mac=${hubMacAddress} code=${code} reason=${reason.toString()}`);
@@ -126,7 +126,7 @@ function sendCommand(socket, command) {
         durationMs: command.durationMs,
     }));
 }
-async function handleHubMessage(doorLockService, hubId, socket, data) {
+async function handleHubMessage(doorLockService, hubId, hubMacAddress, hubSecret, socket, data, ingestHubEvent) {
     let message;
     try {
         message = JSON.parse(data.toString());
@@ -141,6 +141,44 @@ async function handleHubMessage(doorLockService, hubId, socket, data) {
     }
     if (message.type === "offer" || message.type === "ice-candidate") {
         (0, live_feed_server_1.sendLiveFeedSignalToViewers)(hubId, { ...message, hubId });
+        return;
+    }
+    if (isHubEventMessage(message)) {
+        if (!ingestHubEvent) {
+            socket.send(JSON.stringify({ type: "error", error: "Hub event handling is not configured" }));
+            return;
+        }
+        const eventType = hubEventTypeFromMessage(message);
+        if (!eventType) {
+            socket.send(JSON.stringify({
+                type: "hub_event_error",
+                eventType: "",
+                error: "Hub event type is required",
+            }));
+            return;
+        }
+        try {
+            const result = await ingestHubEvent({
+                hubMacAddress,
+                hubSecret,
+                sensorMacAddress: stringOrUndefined(message.sensorMacAddress),
+                eventType,
+                severity: stringOrUndefined(message.severity),
+                payload: objectOrEmpty(message.payload),
+            });
+            socket.send(JSON.stringify({
+                type: "hub_event_ack",
+                eventType,
+                notification: result?.notification,
+            }));
+        }
+        catch (error) {
+            socket.send(JSON.stringify({
+                type: "hub_event_error",
+                eventType,
+                error: error instanceof Error ? error.message : "Hub event failed",
+            }));
+        }
         return;
     }
     if (message.type !== "door_lock_ack") {
@@ -160,4 +198,26 @@ async function handleHubMessage(doorLockService, hubId, socket, data) {
     catch (error) {
         socket.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : "ACK failed" }));
     }
+}
+function isHubEventMessage(message) {
+    const type = String(message.type || "");
+    return (type === "hub_event" ||
+        type === "sensor_event" ||
+        type === "door_opened" ||
+        type === "shock_detected");
+}
+function hubEventTypeFromMessage(message) {
+    const type = String(message.type || "");
+    if (type === "door_opened" || type === "shock_detected")
+        return type;
+    return String(message.eventType || "");
+}
+function stringOrUndefined(value) {
+    return typeof value === "string" && value.trim() ? value : undefined;
+}
+function objectOrEmpty(value) {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+        return value;
+    }
+    return {};
 }

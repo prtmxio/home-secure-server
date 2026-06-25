@@ -3,14 +3,18 @@ import { RawData, WebSocket, WebSocketServer } from "ws";
 import { AppConfig } from "../../config/env";
 import { DoorLockService } from "../door-lock/door-lock.service";
 import { DoorLockCommandDto } from "../door-lock/door-lock.types";
+import { DeviceEventInput } from "../device/device.types";
 import { HubModel } from "../hubs/hub.model";
 import { broadcastLiveFeedStatus, sendLiveFeedSignalToViewers } from "../live-feed/live-feed.server";
 
 interface HubSocket {
   hubId: string;
   hubMacAddress: string;
+  hubSecret: string;
   socket: WebSocket;
 }
+
+type HubEventIngestor = (payload: DeviceEventInput) => Promise<unknown>;
 
 const CONTROL_WS_PATH = "/api/device/hubs/control/ws";
 
@@ -74,6 +78,7 @@ export function attachHubControlWebSocket(
   server: http.Server,
   config: AppConfig,
   doorLockService: DoorLockService,
+  ingestHubEvent?: HubEventIngestor,
 ): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true });
 
@@ -114,12 +119,20 @@ export function attachHubControlWebSocket(
             existingSocket.socket.close(4000, "Replaced by a new control connection");
           }
 
-          socketsByHubId.set(hubId, { hubId, hubMacAddress, socket: ws });
+          socketsByHubId.set(hubId, { hubId, hubMacAddress, hubSecret, socket: ws });
           console.info(`[HUB_WS] Control websocket connected hub=${hubId} mac=${hubMacAddress}`);
           broadcastLiveFeedStatus(hubId, "live");
 
           ws.on("message", (data) => {
-            void handleHubMessage(doorLockService, hubId, ws, data);
+            void handleHubMessage(
+              doorLockService,
+              hubId,
+              hubMacAddress,
+              hubSecret,
+              ws,
+              data,
+              ingestHubEvent,
+            );
           });
           ws.on("close", (code, reason) => {
             console.info(`[HUB_WS] Control websocket closed hub=${hubId} mac=${hubMacAddress} code=${code} reason=${reason.toString()}`);
@@ -160,8 +173,11 @@ function sendCommand(socket: WebSocket, command: DoorLockCommandDto): void {
 async function handleHubMessage(
   doorLockService: DoorLockService,
   hubId: string,
+  hubMacAddress: string,
+  hubSecret: string,
   socket: WebSocket,
   data: RawData,
+  ingestHubEvent?: HubEventIngestor,
 ): Promise<void> {
   let message: Record<string, unknown>;
   try {
@@ -178,6 +194,45 @@ async function handleHubMessage(
 
   if (message.type === "offer" || message.type === "ice-candidate") {
     sendLiveFeedSignalToViewers(hubId, { ...message, hubId });
+    return;
+  }
+
+  if (isHubEventMessage(message)) {
+    if (!ingestHubEvent) {
+      socket.send(JSON.stringify({ type: "error", error: "Hub event handling is not configured" }));
+      return;
+    }
+
+    const eventType = hubEventTypeFromMessage(message);
+    if (!eventType) {
+      socket.send(JSON.stringify({
+        type: "hub_event_error",
+        eventType: "",
+        error: "Hub event type is required",
+      }));
+      return;
+    }
+    try {
+      const result = await ingestHubEvent({
+        hubMacAddress,
+        hubSecret,
+        sensorMacAddress: stringOrUndefined(message.sensorMacAddress),
+        eventType,
+        severity: stringOrUndefined(message.severity),
+        payload: objectOrEmpty(message.payload),
+      });
+      socket.send(JSON.stringify({
+        type: "hub_event_ack",
+        eventType,
+        notification: (result as { notification?: unknown })?.notification,
+      }));
+    } catch (error) {
+      socket.send(JSON.stringify({
+        type: "hub_event_error",
+        eventType,
+        error: error instanceof Error ? error.message : "Hub event failed",
+      }));
+    }
     return;
   }
 
@@ -199,4 +254,31 @@ async function handleHubMessage(
   } catch (error) {
     socket.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : "ACK failed" }));
   }
+}
+
+function isHubEventMessage(message: Record<string, unknown>): boolean {
+  const type = String(message.type || "");
+  return (
+    type === "hub_event" ||
+    type === "sensor_event" ||
+    type === "door_opened" ||
+    type === "shock_detected"
+  );
+}
+
+function hubEventTypeFromMessage(message: Record<string, unknown>): string {
+  const type = String(message.type || "");
+  if (type === "door_opened" || type === "shock_detected") return type;
+  return String(message.eventType || "");
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function objectOrEmpty(value: unknown): Record<string, unknown> {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
 }

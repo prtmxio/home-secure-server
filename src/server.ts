@@ -16,7 +16,12 @@ async function bootstrap(): Promise<void> {
   const app = createApp(env, realtimeServices);
   const server = http.createServer(app);
 
-  attachHubControlWebSocket(server, env, realtimeServices.doorLockService);
+  attachHubControlWebSocket(
+    server,
+    env,
+    realtimeServices.doorLockService,
+    realtimeServices.ingestHubEvent,
+  );
   attachLiveFeedServer(server, env, {
     isDeviceConnected: isHubControlConnected,
     sendToDevice: sendLiveFeedSignalToHub,

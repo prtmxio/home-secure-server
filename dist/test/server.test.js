@@ -47,7 +47,7 @@ node_test_1.default.before(async () => {
     realtimeServices = (0, app_1.createRealtimeServices)();
     app = (0, app_1.createApp)(testConfig, realtimeServices);
     httpServer = http_1.default.createServer(app);
-    (0, hub_control_ws_1.attachHubControlWebSocket)(httpServer, testConfig, realtimeServices.doorLockService);
+    (0, hub_control_ws_1.attachHubControlWebSocket)(httpServer, testConfig, realtimeServices.doorLockService, realtimeServices.ingestHubEvent);
     (0, live_feed_server_1.attachLiveFeedServer)(httpServer, testConfig, {
         isDeviceConnected: hub_control_ws_1.isHubControlConnected,
         sendToDevice: hub_control_ws_1.sendLiveFeedSignalToHub,
@@ -370,6 +370,49 @@ node_test_1.default.afterEach(async () => {
         strict_1.default.equal(hubResetCommand.action, "format_and_reset");
         strict_1.default.equal(hubResetCommand.reason, "hub_deleted");
         strict_1.default.equal(hubResetCommand.hubMacAddress, "AA:BB:CC:DD:EE:40");
+    }
+    finally {
+        ws.close();
+    }
+});
+(0, node_test_1.default)("hub control WebSocket events create user notifications", async () => {
+    const { token, homeId, hubSecret } = await onboardHub("Socket Event User", "socket-event@example.com", "AA:BB:CC:DD:EE:55");
+    const pairResponse = await (0, supertest_1.default)(app)
+        .post(`/api/homes/${homeId}/sensors/pair`)
+        .set("Authorization", `Bearer ${token}`)
+        .send({
+        sensorMacAddress: "11:22:33:44:55:88",
+        name: "Main Door Sensor",
+        type: "contact",
+        zone: "Main Door",
+    });
+    strict_1.default.equal(pairResponse.status, 201);
+    const confirmResponse = await (0, supertest_1.default)(app)
+        .post("/api/device/hubs/sensors/confirm")
+        .set("x-device-api-key", "device-test-key")
+        .set("x-hub-mac-address", "AA:BB:CC:DD:EE:55")
+        .set("x-hub-secret", hubSecret)
+        .send({ sensorMacAddress: "11:22:33:44:55:88" });
+    strict_1.default.equal(confirmResponse.status, 200);
+    const ws = openHubControlSocket("AA:BB:CC:DD:EE:55", hubSecret);
+    try {
+        await waitWsOpen(ws);
+        ws.send(JSON.stringify({
+            type: "sensor_event",
+            eventType: "door_opened",
+            sensorMacAddress: "11:22:33:44:55:88",
+            payload: { reedState: "open" },
+        }));
+        const ack = await nextWsJsonOfType(ws, "hub_event_ack");
+        strict_1.default.equal(ack.eventType, "door_opened");
+        strict_1.default.equal(ack.notification.eventType, "door_opened");
+        const notificationsResponse = await (0, supertest_1.default)(app)
+            .get("/api/notifications")
+            .set("Authorization", `Bearer ${token}`);
+        strict_1.default.equal(notificationsResponse.status, 200);
+        strict_1.default.equal(notificationsResponse.body.notifications.length, 1);
+        strict_1.default.equal(notificationsResponse.body.notifications[0].eventType, "door_opened");
+        strict_1.default.equal(notificationsResponse.body.notifications[0].title, "Door opened");
     }
     finally {
         ws.close();

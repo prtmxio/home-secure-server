@@ -28,6 +28,16 @@ class NotificationService {
         await notification.save();
         return this.serialize(notification);
     }
+    async deleteForUser(userId, notificationId) {
+        const result = await notification_model_1.NotificationModel.deleteOne({ _id: notificationId, user: userId });
+        if (result.deletedCount === 0) {
+            throw new api_error_1.ApiError(404, "Notification not found");
+        }
+    }
+    async clearForUser(userId) {
+        const result = await notification_model_1.NotificationModel.deleteMany({ user: userId });
+        return { deletedCount: result.deletedCount || 0 };
+    }
     publishRealtime(notification) {
         const payload = this.serialize(notification);
         notification_broker_1.notificationBroker.publish(payload.userId, "notification", payload);

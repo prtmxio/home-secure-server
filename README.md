@@ -478,11 +478,20 @@ To mark read:
 
 - `PATCH /api/notifications/:notificationId/read`
 
+To delete alerts:
+
+- `DELETE /api/notifications/:notificationId`
+- `DELETE /api/notifications`
+
+Both delete endpoints are authenticated and only affect alerts belonging to the
+current user.
+
 This allows the app to show:
 
 - live alerts when a door or window sensor is triggered
 - previous notifications
 - read/unread state
+- clear all alerts and swipe-to-delete single alerts
 - OS-level push popups when the app is closed or in background, if Firebase is
   configured
 
@@ -515,10 +524,9 @@ ESP32 camera/hub
   -> Flutter app
 ```
 
-The backend WebSockets are only for commands and signaling. The hub should keep
-one device WebSocket open for door-lock commands, camera start/stop commands,
-and WebRTC live-feed signaling. The camera video itself should travel as WebRTC
-media.
+The hub should keep one device WebSocket open for door-lock commands, sensor
+alerts, camera start/stop commands, and WebRTC live-feed signaling. The camera
+video itself should travel as WebRTC media.
 
 Hub device WebSocket endpoint:
 
@@ -556,8 +564,8 @@ If a mobile viewer is already waiting, the backend also sends:
 
 The ESP32 should start its WebRTC offer when it receives `viewer-ready` on the
 same hub control WebSocket. That socket is also used for messages like
-`door_lock_command`, `door_lock_ack`, `camera_stream_command`, and
-`camera_stream_status`.
+`door_lock_command`, `door_lock_ack`, `sensor_event`, `camera_stream_command`,
+and `camera_stream_status`.
 
 ESP32 sends an SDP offer:
 
@@ -1170,7 +1178,52 @@ the hub was offline and did not receive the reset command.
 
 ### 10. Send hub or sensor activity events
 
-When the hub or a paired sensor detects activity, call:
+When the hub or a paired sensor detects activity, send the event on the already
+open hub control WebSocket at `/api/device/hubs/control/ws`. Do not open a
+second socket and do not call a separate endpoint for normal MVP alerts.
+
+Generic event shape:
+
+```json
+{
+  "type": "sensor_event",
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "eventType": "door_opened",
+  "payload": {
+    "module": "magnetic_reed"
+  }
+}
+```
+
+The backend uses the authenticated socket headers (`x-hub-mac-address` and
+`x-hub-secret`) as the hub identity, creates the activity log and notification,
+then sends FCM push to the owner of that hub.
+
+The backend replies on the same WebSocket:
+
+```json
+{
+  "type": "hub_event_ack",
+  "eventType": "door_opened",
+  "notification": {
+    "id": "<NOTIFICATION_ID>",
+    "eventType": "door_opened",
+    "severity": "critical"
+  }
+}
+```
+
+If the event cannot be stored, the backend replies:
+
+```json
+{
+  "type": "hub_event_error",
+  "eventType": "door_opened",
+  "error": "Sensor not found for this hub"
+}
+```
+
+The older REST endpoint is still available for manual testing:
 
 ```http
 POST /api/device/hubs/events
@@ -1192,10 +1245,11 @@ Hub-level event:
 }
 ```
 
-Magnetic reed door-open event:
+Magnetic reed door-open WebSocket event:
 
 ```json
 {
+  "type": "sensor_event",
   "sensorMacAddress": "11:22:33:44:55:66",
   "eventType": "door_opened",
   "payload": {
@@ -1207,10 +1261,24 @@ Magnetic reed door-open event:
 }
 ```
 
-Vibration shock event:
+Shortcut form is also accepted:
 
 ```json
 {
+  "type": "door_opened",
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "payload": {
+    "module": "magnetic_reed",
+    "reedState": "open"
+  }
+}
+```
+
+Vibration shock WebSocket event:
+
+```json
+{
+  "type": "sensor_event",
   "sensorMacAddress": "11:22:33:44:55:66",
   "eventType": "shock_detected",
   "payload": {
@@ -1218,6 +1286,19 @@ Vibration shock event:
     "shockFound": true,
     "batteryPercent": 91,
     "rssi": -58
+  }
+}
+```
+
+Shortcut form is also accepted:
+
+```json
+{
+  "type": "shock_detected",
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "payload": {
+    "module": "vibration",
+    "shockFound": true
   }
 }
 ```
@@ -1397,7 +1478,8 @@ On every boot:
    - `viewer-ready`
    - `answer`
    - `ice-candidate`
-8. Send REST events for hub/sensor activity.
+8. Send `sensor_event`, `door_opened`, or `shock_detected` messages on the
+   same WebSocket for hub/sensor activity.
 9. Reconnect the WebSocket if it closes.
 
 ## End-to-end summary

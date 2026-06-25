@@ -16,6 +16,14 @@ class NotificationController {
         const notification = await this.notificationService.markAsRead(req.user.id, req.params.notificationId);
         res.status(200).json({ notification });
     });
+    deleteNotification = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        await this.notificationService.deleteForUser(req.user.id, req.params.notificationId);
+        res.status(200).json({ deleted: true });
+    });
+    clearNotifications = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.notificationService.clearForUser(req.user.id);
+        res.status(200).json({ cleared: true, deletedCount: result.deletedCount });
+    });
     registerPushToken = (0, async_handler_1.asyncHandler)(async (req, res) => {
         await this.notificationService.registerPushToken(req.user.id, req.body.token, req.body.platform);
         res.status(200).json({ registered: true });
