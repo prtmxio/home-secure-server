@@ -5,6 +5,7 @@ const notification_broker_1 = require("../../common/lib/notification-broker");
 const api_error_1 = require("../../common/errors/api-error");
 const user_model_1 = require("../users/user.model");
 const notification_model_1 = require("./notification.model");
+const PUSH_ENABLED_EVENT_TYPES = new Set(["door_opened", "shock_detected"]);
 class NotificationService {
     pushNotificationService;
     constructor(pushNotificationService) {
@@ -136,6 +137,8 @@ class NotificationService {
     }
     async publishPush(notification) {
         if (!this.pushNotificationService)
+            return;
+        if (!PUSH_ENABLED_EVENT_TYPES.has(notification.eventType))
             return;
         const user = await user_model_1.UserModel.findById(notification.userId).lean();
         const tokens = user?.pushTokens?.map((item) => item.token) || [];

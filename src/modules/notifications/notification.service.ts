@@ -6,6 +6,8 @@ import { PushNotificationService } from "../push-notifications/push-notification
 import { NotificationModel } from "./notification.model";
 import { NotificationDto } from "./notification.types";
 
+const PUSH_ENABLED_EVENT_TYPES = new Set(["door_opened", "shock_detected"]);
+
 export class NotificationService {
   constructor(private readonly pushNotificationService?: PushNotificationService) {}
 
@@ -174,6 +176,7 @@ export class NotificationService {
 
   private async publishPush(notification: NotificationDto): Promise<void> {
     if (!this.pushNotificationService) return;
+    if (!PUSH_ENABLED_EVENT_TYPES.has(notification.eventType)) return;
 
     const user = await UserModel.findById(notification.userId).lean();
     const tokens = user?.pushTokens?.map((item) => item.token) || [];

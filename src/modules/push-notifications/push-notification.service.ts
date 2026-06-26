@@ -9,6 +9,9 @@ interface PushPayload {
   data?: Record<string, string>;
 }
 
+const SECURITY_ALERT_CHANNEL_ID = "glazia_security_alerts";
+const SECURITY_ALERT_SOUND = "glazia_siren";
+
 export interface PushSendResult {
   configured: boolean;
   tokenCount: number;
@@ -61,8 +64,9 @@ export class PushNotificationService {
       android: {
         priority: "high",
         notification: {
+          channelId: SECURITY_ALERT_CHANNEL_ID,
           priority: "high",
-          defaultSound: true,
+          sound: SECURITY_ALERT_SOUND,
         },
       },
       apns: {

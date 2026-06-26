@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.PushNotificationService = void 0;
 const app_1 = require("firebase-admin/app");
 const messaging_1 = require("firebase-admin/messaging");
+const SECURITY_ALERT_CHANNEL_ID = "glazia_security_alerts";
+const SECURITY_ALERT_SOUND = "glazia_siren";
 class PushNotificationService {
     config;
     initialized = false;
@@ -45,8 +47,9 @@ class PushNotificationService {
             android: {
                 priority: "high",
                 notification: {
+                    channelId: SECURITY_ALERT_CHANNEL_ID,
                     priority: "high",
-                    defaultSound: true,
+                    sound: SECURITY_ALERT_SOUND,
                 },
             },
             apns: {
