@@ -81,6 +81,12 @@ export class NotificationService {
     }
 
     await user.save();
+    console.info("[PUSH] Registered FCM token", {
+      userId: String(userId),
+      platform,
+      tokenSuffix: trimmedToken.slice(-8),
+      tokenCount: user.pushTokens.length,
+    });
   }
 
   async unregisterPushToken(
@@ -96,6 +102,58 @@ export class NotificationService {
       { _id: userId },
       { $pull: { pushTokens: { token: trimmedToken } } },
     );
+  }
+
+  async pushStatus(userId: string | Types.ObjectId): Promise<{
+    firebaseConfigured: boolean;
+    tokenCount: number;
+    platforms: string[];
+  }> {
+    const user = await UserModel.findById(userId).lean();
+    const pushTokens = user?.pushTokens || [];
+    return {
+      firebaseConfigured: this.pushNotificationService?.isConfigured() || false,
+      tokenCount: pushTokens.length,
+      platforms: [...new Set(pushTokens.map((item) => item.platform || "unknown"))],
+    };
+  }
+
+  async sendTestPush(userId: string | Types.ObjectId): Promise<{
+    firebaseConfigured: boolean;
+    tokenCount: number;
+    successCount: number;
+    failureCount: number;
+    errors: string[];
+  }> {
+    if (!this.pushNotificationService) {
+      return {
+        firebaseConfigured: false,
+        tokenCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        errors: ["Push notification service is not configured"],
+      };
+    }
+
+    const user = await UserModel.findById(userId).lean();
+    const tokens = user?.pushTokens?.map((item) => item.token) || [];
+    const result = await this.pushNotificationService.sendToTokens({
+      tokens,
+      title: "Glazia test alert",
+      body: "Push notifications are configured for this device.",
+      data: {
+        eventType: "test_push",
+        severity: "info",
+      },
+    });
+
+    return {
+      firebaseConfigured: result.configured,
+      tokenCount: result.tokenCount,
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      errors: result.errors,
+    };
   }
 
   serialize(notification: any): NotificationDto {

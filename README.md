@@ -457,6 +457,34 @@ Request:
 }
 ```
 
+To verify push setup for the logged-in user:
+
+```http
+GET /api/notifications/push-status
+Authorization: Bearer <USER_JWT>
+```
+
+Response:
+
+```json
+{
+  "firebaseConfigured": true,
+  "tokenCount": 1,
+  "platforms": ["android"]
+}
+```
+
+To send a manual test push to the logged-in user's registered devices:
+
+```http
+POST /api/notifications/test-push
+Authorization: Bearer <USER_JWT>
+```
+
+If `firebaseConfigured` is `false`, add Firebase Admin credentials to backend
+`.env`. If `tokenCount` is `0`, log out and log in again from the mobile app so
+the app can register its FCM token.
+
 When the user logs out, the app removes the current device token from that
 user:
 

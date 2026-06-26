@@ -10,6 +10,8 @@ export function createNotificationRoutes(
   router.use(authMiddleware);
   router.get("/", notificationController.listNotifications);
   router.get("/stream", notificationController.streamNotifications);
+  router.get("/push-status", notificationController.pushStatus);
+  router.post("/test-push", notificationController.sendTestPush);
   router.delete("/", notificationController.clearNotifications);
   router.post("/push-token", notificationController.registerPushToken);
   router.delete("/push-token", notificationController.unregisterPushToken);

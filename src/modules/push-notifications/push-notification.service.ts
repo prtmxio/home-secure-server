@@ -9,6 +9,14 @@ interface PushPayload {
   data?: Record<string, string>;
 }
 
+export interface PushSendResult {
+  configured: boolean;
+  tokenCount: number;
+  successCount: number;
+  failureCount: number;
+  errors: string[];
+}
+
 export class PushNotificationService {
   private initialized = false;
 
@@ -16,12 +24,31 @@ export class PushNotificationService {
     this.initialize();
   }
 
-  async sendToTokens(payload: PushPayload): Promise<void> {
+  isConfigured(): boolean {
+    return this.initialized;
+  }
+
+  async sendToTokens(payload: PushPayload): Promise<PushSendResult> {
     const tokens = [...new Set(payload.tokens.filter(Boolean))];
-    if (!tokens.length) return;
+    if (!tokens.length) {
+      console.warn("[PUSH] No FCM tokens registered for notification recipient");
+      return {
+        configured: this.initialized,
+        tokenCount: 0,
+        successCount: 0,
+        failureCount: 0,
+        errors: [],
+      };
+    }
     if (!this.initialized) {
       console.warn("[PUSH] Firebase is not configured; skipping push send");
-      return;
+      return {
+        configured: false,
+        tokenCount: tokens.length,
+        successCount: 0,
+        failureCount: tokens.length,
+        errors: ["Firebase Admin is not configured"],
+      };
     }
 
     const response = await getMessaging().sendEachForMulticast({
@@ -48,14 +75,25 @@ export class PushNotificationService {
     });
 
     if (response.failureCount > 0) {
+      const errors = response.responses
+        .filter((item: { success: boolean }) => !item.success)
+        .map((item: { error?: { message?: string } }) => item.error?.message || "Unknown FCM error");
       console.warn("[PUSH] Some push notifications failed", {
         successCount: response.successCount,
         failureCount: response.failureCount,
-        errors: response.responses
-          .filter((item: { success: boolean }) => !item.success)
-          .map((item: { error?: { message?: string } }) => item.error?.message),
+        errors,
       });
     }
+
+    return {
+      configured: true,
+      tokenCount: tokens.length,
+      successCount: response.successCount,
+      failureCount: response.failureCount,
+      errors: response.responses
+        .filter((item: { success: boolean }) => !item.success)
+        .map((item: { error?: { message?: string } }) => item.error?.message || "Unknown FCM error"),
+    };
   }
 
   private initialize(): void {
@@ -65,10 +103,14 @@ export class PushNotificationService {
     }
 
     const credential = this.credentialFromConfig();
-    if (!credential) return;
+    if (!credential) {
+      console.warn("[PUSH] Firebase Admin credentials are not configured");
+      return;
+    }
 
     initializeApp({ credential });
     this.initialized = true;
+    console.info("[PUSH] Firebase Admin initialized");
   }
 
   private credentialFromConfig(): Credential | null {

@@ -32,6 +32,14 @@ class NotificationController {
         await this.notificationService.unregisterPushToken(req.user.id, req.body.token);
         res.status(200).json({ unregistered: true });
     });
+    pushStatus = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const status = await this.notificationService.pushStatus(req.user.id);
+        res.status(200).json(status);
+    });
+    sendTestPush = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const result = await this.notificationService.sendTestPush(req.user.id);
+        res.status(200).json(result);
+    });
     streamNotifications = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const userId = req.user.id;
         res.writeHead(200, {

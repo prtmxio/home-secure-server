@@ -67,6 +67,12 @@ class NotificationService {
             });
         }
         await user.save();
+        console.info("[PUSH] Registered FCM token", {
+            userId: String(userId),
+            platform,
+            tokenSuffix: trimmedToken.slice(-8),
+            tokenCount: user.pushTokens.length,
+        });
     }
     async unregisterPushToken(userId, token) {
         const trimmedToken = String(token || "").trim();
@@ -74,6 +80,44 @@ class NotificationService {
             throw new api_error_1.ApiError(400, "Push token is required");
         }
         await user_model_1.UserModel.updateOne({ _id: userId }, { $pull: { pushTokens: { token: trimmedToken } } });
+    }
+    async pushStatus(userId) {
+        const user = await user_model_1.UserModel.findById(userId).lean();
+        const pushTokens = user?.pushTokens || [];
+        return {
+            firebaseConfigured: this.pushNotificationService?.isConfigured() || false,
+            tokenCount: pushTokens.length,
+            platforms: [...new Set(pushTokens.map((item) => item.platform || "unknown"))],
+        };
+    }
+    async sendTestPush(userId) {
+        if (!this.pushNotificationService) {
+            return {
+                firebaseConfigured: false,
+                tokenCount: 0,
+                successCount: 0,
+                failureCount: 0,
+                errors: ["Push notification service is not configured"],
+            };
+        }
+        const user = await user_model_1.UserModel.findById(userId).lean();
+        const tokens = user?.pushTokens?.map((item) => item.token) || [];
+        const result = await this.pushNotificationService.sendToTokens({
+            tokens,
+            title: "Glazia test alert",
+            body: "Push notifications are configured for this device.",
+            data: {
+                eventType: "test_push",
+                severity: "info",
+            },
+        });
+        return {
+            firebaseConfigured: result.configured,
+            tokenCount: result.tokenCount,
+            successCount: result.successCount,
+            failureCount: result.failureCount,
+            errors: result.errors,
+        };
     }
     serialize(notification) {
         return {
