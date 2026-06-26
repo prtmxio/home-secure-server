@@ -430,6 +430,67 @@ test("deleting sensors and hubs sends cleanup commands over hub WebSocket", asyn
   }
 });
 
+test("sensor manual toggle sends enable and disable commands over hub WebSocket", async () => {
+  const { token, homeId, hubSecret } = await onboardHub(
+    "Toggle Sensor User",
+    "toggle-sensor@example.com",
+    "AA:BB:CC:DD:EE:45",
+  );
+
+  const pairResponse = await request(app)
+    .post(`/api/homes/${homeId}/sensors/pair`)
+    .set("Authorization", `Bearer ${token}`)
+    .send({
+      sensorMacAddress: "11:22:33:44:55:45",
+      name: "Bedroom Sensor",
+      type: "contact",
+      zone: "Bedroom",
+    });
+  assert.equal(pairResponse.status, 201);
+  const sensorId = pairResponse.body.sensor.id as string;
+
+  const confirmResponse = await request(app)
+    .post("/api/device/hubs/sensors/confirm")
+    .set("x-device-api-key", "device-test-key")
+    .set("x-hub-mac-address", "AA:BB:CC:DD:EE:45")
+    .set("x-hub-secret", hubSecret)
+    .send({ sensorMacAddress: "11:22:33:44:55:45" });
+  assert.equal(confirmResponse.status, 200);
+
+  const ws = openHubControlSocket("AA:BB:CC:DD:EE:45", hubSecret);
+  try {
+    await waitWsOpen(ws);
+
+    const disablePromise = nextWsJsonOfType(ws, "sensor_toggle_command");
+    const disableResponse = await request(app)
+      .patch(`/api/homes/${homeId}/sensors/${sensorId}/enabled`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ enabled: false });
+    assert.equal(disableResponse.status, 200);
+    assert.equal(disableResponse.body.commandSent, true);
+
+    const disableCommand = await disablePromise;
+    assert.equal(disableCommand.sensorMacAddress, "11:22:33:44:55:45");
+    assert.equal(disableCommand.enabled, false);
+    assert.equal(disableCommand.action, "disable");
+
+    const enablePromise = nextWsJsonOfType(ws, "sensor_toggle_command");
+    const enableResponse = await request(app)
+      .patch(`/api/homes/${homeId}/sensors/${sensorId}/enabled`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ enabled: true });
+    assert.equal(enableResponse.status, 200);
+    assert.equal(enableResponse.body.commandSent, true);
+
+    const enableCommand = await enablePromise;
+    assert.equal(enableCommand.sensorMacAddress, "11:22:33:44:55:45");
+    assert.equal(enableCommand.enabled, true);
+    assert.equal(enableCommand.action, "enable");
+  } finally {
+    ws.close();
+  }
+});
+
 test("hub control WebSocket events create user notifications", async () => {
   const { token, homeId, hubSecret } = await onboardHub(
     "Socket Event User",

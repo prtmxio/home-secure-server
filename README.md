@@ -1120,7 +1120,51 @@ Response:
 }
 ```
 
-### 8. Delete sensor
+### 8. Toggle sensor active state
+
+When a user toggles a sensor from the mobile app, the app calls:
+
+```http
+PATCH /api/homes/<HOME_ID>/sensors/<SENSOR_ID>/enabled
+Authorization: Bearer <USER_JWT>
+Content-Type: application/json
+```
+
+Request:
+
+```json
+{
+  "enabled": false
+}
+```
+
+If the hub control WebSocket is connected, backend sends this message to the
+ESP32 hub:
+
+```json
+{
+  "type": "sensor_toggle_command",
+  "sensorMacAddress": "11:22:33:44:55:66",
+  "enabled": false,
+  "action": "disable"
+}
+```
+
+For `"enabled": true`, `action` is `"enable"`.
+
+ESP32 behavior must follow the same local ESP-NOW procedure as the hub UI:
+
+- find the local sensor table entry by `sensorMacAddress`
+- when disabling: save enabled=false in NVS, delete the ESP-NOW peer, mark the
+  sensor unpaired/offline locally, and refresh the display
+- when enabling: save enabled=true in NVS, re-add the encrypted ESP-NOW peer
+  using the stored LMK/provision key, start HELLO retry/reconnect, and refresh
+  the display
+
+If `commandSent` is `false`, the backend accepted the request but the hub was
+offline and did not receive the command.
+
+### 9. Delete sensor
 
 When a user deletes a sensor from the mobile app, the app calls:
 
@@ -1161,7 +1205,7 @@ ESP32 behavior:
 If `commandSent` is `false`, the sensor is still deleted from the backend, but
 the hub was offline and did not receive the cleanup command.
 
-### 9. Delete hub
+### 10. Delete hub
 
 When a user deletes a hub from the mobile app, the app calls:
 
@@ -1204,7 +1248,7 @@ ESP32 behavior:
 If `commandSent` is `false`, the hub/home is still deleted from the backend, but
 the hub was offline and did not receive the reset command.
 
-### 10. Send hub or sensor activity events
+### 11. Send hub or sensor activity events
 
 When the hub or a paired sensor detects activity, send the event on the already
 open hub control WebSocket at `/api/device/hubs/control/ws`. Do not open a
@@ -1348,7 +1392,7 @@ Response:
 }
 ```
 
-### 11. Camera control command
+### 12. Camera control command
 
 When the first mobile viewer opens the camera stream, backend sends this on the
 same hub control WebSocket:
@@ -1500,6 +1544,7 @@ On every boot:
 6. Wait for `{ "type": "ready" }`.
 7. Process socket messages forever:
    - `door_lock_command`
+   - `sensor_toggle_command`
    - `sensor_delete_command`
    - `hub_reset_command`
    - `camera_stream_command`

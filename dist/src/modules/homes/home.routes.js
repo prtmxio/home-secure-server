@@ -9,6 +9,7 @@ function createHomeRoutes(homeController, authMiddleware) {
     router.get("/", homeController.listHomes);
     router.get("/:homeId", homeController.getHome);
     router.post("/:homeId/sensors/pair", homeController.pairSensor);
+    router.patch("/:homeId/sensors/:sensorId/enabled", homeController.setSensorEnabled);
     router.delete("/:homeId/sensors/:sensorId", homeController.deleteSensor);
     router.post("/:homeId/door-lock/open", homeController.openDoorLock);
     router.post("/:homeId/door-lock/toggle", homeController.toggleDoorLock);

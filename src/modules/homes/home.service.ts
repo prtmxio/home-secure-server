@@ -350,6 +350,63 @@ export class HomeService {
     };
   }
 
+  async setSensorEnabled(
+    userId: string | Types.ObjectId,
+    homeId: string,
+    sensorId: string,
+    enabled: boolean,
+  ): Promise<{ updated: true; hubId: string; hubMacAddress: string; sensorMacAddress: string; enabled: boolean }> {
+    const home = await HomeModel.findOne({
+      _id: homeId,
+      owner: userId,
+    }).populate("hub");
+    if (!home || !home.hub) {
+      throw new ApiError(404, "Home not found");
+    }
+
+    const hub = home.hub as unknown as IHub & {
+      _id: Types.ObjectId;
+      id: string;
+    };
+    const sensor = await SensorModel.findOne({
+      _id: sensorId,
+      hub: hub._id,
+    });
+    if (!sensor) {
+      throw new ApiError(404, "Sensor not found");
+    }
+    if (sensor.status === "provisioning") {
+      throw new ApiError(409, "Sensor pairing has not been confirmed by the hub");
+    }
+
+    sensor.status = enabled ? "paired" : "offline";
+    sensor.lastActivityAt = enabled ? sensor.lastActivityAt : new Date();
+    await sensor.save();
+
+    await ActivityLogModel.create({
+      user: new Types.ObjectId(String(userId)),
+      hub: hub._id,
+      sensor: sensor._id,
+      eventType: enabled ? "sensor_enabled" : "sensor_disabled",
+      severity: "info",
+      source: "mobile",
+      payload: {
+        homeId,
+        hubMacAddress: hub.macAddress,
+        sensorMacAddress: sensor.macAddress,
+        enabled,
+      },
+    });
+
+    return {
+      updated: true,
+      hubId: hub.id || String(hub._id),
+      hubMacAddress: hub.macAddress,
+      sensorMacAddress: sensor.macAddress,
+      enabled,
+    };
+  }
+
   async deleteHomeHub(
     userId: string | Types.ObjectId,
     homeId: string,

@@ -49,6 +49,27 @@ export class HomeController {
     res.status(200).json({ ...result, commandSent });
   });
 
+  setSensorEnabled = asyncHandler(async (req: Request, res: Response) => {
+    const enabled = Boolean(req.body.enabled);
+    const result = await this.homeService.setSensorEnabled(
+      req.user!.id,
+      req.params.homeId as string,
+      req.params.sensorId as string,
+      enabled,
+    );
+    const commandSent = sendHubControlMessage(
+      result.hubId,
+      {
+        type: "sensor_toggle_command",
+        sensorMacAddress: result.sensorMacAddress,
+        enabled: result.enabled,
+        action: result.enabled ? "enable" : "disable",
+      },
+      "Sensor toggle command",
+    );
+    res.status(200).json({ ...result, commandSent });
+  });
+
   deleteHub = asyncHandler(async (req: Request, res: Response) => {
     const result = await this.homeService.deleteHomeHub(req.user!.id, req.params.homeId as string);
     const commandSent = sendHubControlMessage(

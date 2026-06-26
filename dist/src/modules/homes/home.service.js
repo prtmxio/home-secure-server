@@ -271,6 +271,50 @@ class HomeService {
             sensorMacAddress,
         };
     }
+    async setSensorEnabled(userId, homeId, sensorId, enabled) {
+        const home = await home_model_1.HomeModel.findOne({
+            _id: homeId,
+            owner: userId,
+        }).populate("hub");
+        if (!home || !home.hub) {
+            throw new api_error_1.ApiError(404, "Home not found");
+        }
+        const hub = home.hub;
+        const sensor = await sensor_model_1.SensorModel.findOne({
+            _id: sensorId,
+            hub: hub._id,
+        });
+        if (!sensor) {
+            throw new api_error_1.ApiError(404, "Sensor not found");
+        }
+        if (sensor.status === "provisioning") {
+            throw new api_error_1.ApiError(409, "Sensor pairing has not been confirmed by the hub");
+        }
+        sensor.status = enabled ? "paired" : "offline";
+        sensor.lastActivityAt = enabled ? sensor.lastActivityAt : new Date();
+        await sensor.save();
+        await activity_log_model_1.ActivityLogModel.create({
+            user: new mongoose_1.Types.ObjectId(String(userId)),
+            hub: hub._id,
+            sensor: sensor._id,
+            eventType: enabled ? "sensor_enabled" : "sensor_disabled",
+            severity: "info",
+            source: "mobile",
+            payload: {
+                homeId,
+                hubMacAddress: hub.macAddress,
+                sensorMacAddress: sensor.macAddress,
+                enabled,
+            },
+        });
+        return {
+            updated: true,
+            hubId: hub.id || String(hub._id),
+            hubMacAddress: hub.macAddress,
+            sensorMacAddress: sensor.macAddress,
+            enabled,
+        };
+    }
     async deleteHomeHub(userId, homeId) {
         const home = await home_model_1.HomeModel.findOne({
             _id: homeId,

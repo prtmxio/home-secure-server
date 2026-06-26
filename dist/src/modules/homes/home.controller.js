@@ -36,6 +36,17 @@ class HomeController {
         }, "Sensor delete command");
         res.status(200).json({ ...result, commandSent });
     });
+    setSensorEnabled = (0, async_handler_1.asyncHandler)(async (req, res) => {
+        const enabled = Boolean(req.body.enabled);
+        const result = await this.homeService.setSensorEnabled(req.user.id, req.params.homeId, req.params.sensorId, enabled);
+        const commandSent = (0, hub_control_ws_1.sendHubControlMessage)(result.hubId, {
+            type: "sensor_toggle_command",
+            sensorMacAddress: result.sensorMacAddress,
+            enabled: result.enabled,
+            action: result.enabled ? "enable" : "disable",
+        }, "Sensor toggle command");
+        res.status(200).json({ ...result, commandSent });
+    });
     deleteHub = (0, async_handler_1.asyncHandler)(async (req, res) => {
         const result = await this.homeService.deleteHomeHub(req.user.id, req.params.homeId);
         const commandSent = (0, hub_control_ws_1.sendHubControlMessage)(result.hubId, {
