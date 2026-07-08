@@ -471,16 +471,17 @@ node_test_1.default.afterEach(async () => {
 (0, node_test_1.default)("webRTC live feed signaling uses the existing hub control WebSocket", async () => {
     const { token, hubId, hubSecret } = await onboardHub("Door Viewer", "door-viewer@example.com", "AA:BB:CC:DD:EE:01");
     const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:01", hubSecret);
-    const viewerWs = new ws_1.default(`${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`);
+    let viewerWs;
     try {
         await waitWsOpen(hubWs);
+        const viewerReadyForHubPromise = nextWsJsonOfType(hubWs, "viewer-ready");
+        viewerWs = new ws_1.default(`${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`);
         await waitWsOpen(viewerWs);
         const viewerReady = await nextWsJsonOfType(viewerWs, "ready");
         strict_1.default.equal(viewerReady.role, "viewer");
         strict_1.default.equal(viewerReady.mode, "webrtc");
         strict_1.default.equal(viewerReady.status, "live");
-        viewerWs.send(JSON.stringify({ type: "viewer-ready" }));
-        const viewerReadyForHub = await nextWsJsonOfType(hubWs, "viewer-ready");
+        const viewerReadyForHub = await viewerReadyForHubPromise;
         strict_1.default.equal(viewerReadyForHub.hubId, hubId);
         hubWs.send(JSON.stringify({
             type: "offer",
@@ -498,7 +499,30 @@ node_test_1.default.afterEach(async () => {
         strict_1.default.deepEqual(answer.sdp, { type: "answer", sdp: "mobile-answer-sdp" });
     }
     finally {
-        viewerWs.close();
+        viewerWs?.close();
+        hubWs.close();
+    }
+});
+(0, node_test_1.default)("webRTC live feed signaling sends one viewer-ready while a viewer is active", async () => {
+    const { token, hubId, hubSecret } = await onboardHub("Single Viewer", "single-viewer@example.com", "AA:BB:CC:DD:EE:02");
+    const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:02", hubSecret);
+    let firstViewerWs;
+    let secondViewerWs;
+    try {
+        await waitWsOpen(hubWs);
+        const firstViewerReadyForHubPromise = nextWsJsonOfType(hubWs, "viewer-ready");
+        firstViewerWs = new ws_1.default(`${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`);
+        await waitWsOpen(firstViewerWs);
+        strict_1.default.equal((await nextWsJsonOfType(firstViewerWs, "ready")).status, "live");
+        strict_1.default.equal((await firstViewerReadyForHubPromise).hubId, hubId);
+        secondViewerWs = new ws_1.default(`${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`);
+        await waitWsOpen(secondViewerWs);
+        strict_1.default.equal((await nextWsJsonOfType(secondViewerWs, "ready")).status, "live");
+        await assertNoWsJsonOfType(hubWs, "viewer-ready");
+    }
+    finally {
+        secondViewerWs?.close();
+        firstViewerWs?.close();
         hubWs.close();
     }
 });
@@ -588,6 +612,38 @@ async function nextWsJsonOfType(ws, type) {
         }
     }
     throw new Error(`Timed out waiting for WebSocket message type ${type}`);
+}
+async function assertNoWsJsonOfType(ws, type) {
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            resolve();
+        }, 250);
+        const onMessage = (data) => {
+            const message = JSON.parse(data.toString());
+            if (message.type === type) {
+                cleanup();
+                reject(new Error(`Unexpected WebSocket message type ${type}`));
+            }
+        };
+        const onError = (error) => {
+            cleanup();
+            reject(error);
+        };
+        const onClose = () => {
+            cleanup();
+            resolve();
+        };
+        const cleanup = () => {
+            clearTimeout(timeout);
+            ws.off("message", onMessage);
+            ws.off("error", onError);
+            ws.off("close", onClose);
+        };
+        ws.on("message", onMessage);
+        ws.once("error", onError);
+        ws.once("close", onClose);
+    });
 }
 async function waitWsOpen(ws) {
     if (ws.readyState === ws_1.default.OPEN)

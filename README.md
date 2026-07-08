@@ -646,15 +646,16 @@ the mobile viewer connects successfully, the backend returns:
 }
 ```
 
-The Flutter app then tells the ESP32 that a viewer is ready:
+The backend tells the ESP32 that a viewer is ready on the hub control WebSocket.
+It sends this when the first viewer connects, and sends it again if the hub
+control WebSocket reconnects while a viewer is still waiting:
 
 ```json
 {
-  "type": "viewer-ready"
+  "type": "viewer-ready",
+  "hubId": "<HUB_ID>"
 }
 ```
-
-The backend forwards this to connected ESP32 device clients for the same hub.
 
 Mobile app returns an SDP answer:
 
@@ -700,38 +701,36 @@ Mobile app also sends ICE candidates as they are discovered:
    - user JWT
    - requested hub belongs to user
 
-5. App sends:
-   { "type": "viewer-ready" }
-
-6. Backend forwards to ESP32:
+5. Backend forwards to ESP32:
    { "type": "viewer-ready", "hubId": "<HUB_ID>" }
 
-7. ESP32 creates WebRTC peer connection:
+6. ESP32 creates WebRTC peer connection:
    - attach camera video track
    - create SDP offer
    - set local description
 
-8. ESP32 sends:
+7. ESP32 sends:
    { "type": "offer", "sdp": { "type": "offer", "sdp": "..." } }
 
-9. Backend forwards offer to app.
+8. Backend forwards offer to app.
 
-10. App creates WebRTC peer connection:
+9. App creates WebRTC peer connection:
+    - add a recvonly video transceiver
     - set remote description from ESP32 offer
     - create answer
     - set local description
 
-11. App sends:
+10. App sends:
     { "type": "answer", "sdp": { "type": "answer", "sdp": "..." } }
 
-12. Backend forwards answer to ESP32.
+11. Backend forwards answer to ESP32.
 
-13. ESP32 sets remote description from app answer.
+12. ESP32 sets remote description from app answer.
 
-14. Both sides exchange:
+13. Both sides exchange:
     { "type": "ice-candidate", "candidate": { ... } }
 
-15. When ICE connects, app receives remote video track and displays it.
+14. When ICE connects, app receives remote video track and displays it.
 ```
 
 ### ESP32 side responsibilities
@@ -780,7 +779,6 @@ Internally it:
 
 - opens `role=viewer&mode=webrtc`
 - creates an `RTCPeerConnection`
-- sends `viewer-ready`
 - waits for the ESP32 `offer`
 - sets the offer as remote description
 - creates and sends an `answer`
@@ -815,9 +813,9 @@ Recommended production ICE config:
   "iceServers": [
     { "urls": "stun:stun.l.google.com:19302" },
     {
-      "urls": "turn:turn.your-domain.com:3478",
-      "username": "<TURN_USERNAME>",
-      "credential": "<TURN_PASSWORD>"
+      "urls": "turn:13.51.196.176:3478",
+      "username": "xio",
+      "credential": "xio@1234"
     }
   ]
 }

@@ -100,6 +100,7 @@ async function authenticateViewer(url: URL, config: AppConfig): Promise<string> 
 function registerViewer(socket: WebSocket, hubId: string, options: LiveFeedServerOptions): void {
   clients.set(socket, { hubId, socket });
   const viewers = viewersByHub.get(hubId) || new Set<WebSocket>();
+  const hadViewers = viewers.size > 0;
   viewers.add(socket);
   viewersByHub.set(hubId, viewers);
 
@@ -111,7 +112,9 @@ function registerViewer(socket: WebSocket, hubId: string, options: LiveFeedServe
     status: options.isDeviceConnected?.(hubId) ? "live" : "waiting",
   });
 
-  options.sendToDevice?.(hubId, { type: "viewer-ready", hubId });
+  if (!hadViewers) {
+    options.sendToDevice?.(hubId, { type: "viewer-ready", hubId });
+  }
 
   socket.on("message", (raw) => {
     try {
@@ -120,7 +123,7 @@ function registerViewer(socket: WebSocket, hubId: string, options: LiveFeedServe
         sdp?: unknown;
         candidate?: unknown;
       };
-      if (message.type === "answer" || message.type === "ice-candidate" || message.type === "viewer-ready") {
+      if (message.type === "answer" || message.type === "ice-candidate") {
         const sent = options.sendToDevice?.(hubId, { ...message, hubId }) ?? false;
         if (!sent) {
           sendJson(socket, { type: "status", hubId, status: "offline", at: new Date().toISOString() });
@@ -151,6 +154,15 @@ export function broadcastLiveFeedStatus(hubId: string, status: "live" | "offline
 
 export function sendLiveFeedSignalToViewers(hubId: string, payload: unknown): void {
   broadcastToViewers(hubId, payload);
+}
+
+export function hasLiveFeedViewers(hubId: string): boolean {
+  const viewers = viewersByHub.get(hubId);
+  if (!viewers) return false;
+  for (const viewer of viewers) {
+    if (viewer.readyState === WebSocket.OPEN) return true;
+  }
+  return false;
 }
 
 function broadcastToViewers(hubId: string, payload: unknown): void {

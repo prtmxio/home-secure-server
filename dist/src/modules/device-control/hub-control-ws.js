@@ -103,6 +103,10 @@ function attachHubControlWebSocket(server, config, doorLockService, ingestHubEve
                     }
                 });
                 ws.send(JSON.stringify({ type: "ready" }));
+                if ((0, live_feed_server_1.hasLiveFeedViewers)(hubId)) {
+                    ws.send(JSON.stringify({ type: "viewer-ready", hubId }));
+                    console.info(`[HUB_WS] Re-sent viewer-ready to reconnected hub=${hubId} mac=${hubMacAddress}`);
+                }
                 void doorLockService.getQueuedForHub(hubId).then((command) => {
                     if (command && ws.readyState === ws_1.WebSocket.OPEN)
                         sendCommand(ws, command);

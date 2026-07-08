@@ -56,6 +56,9 @@ class NotificationService {
         const now = new Date();
         const existing = user.pushTokens.find((item) => item.token === trimmedToken);
         if (existing) {
+            if (existing.platform === platform) {
+                return;
+            }
             existing.platform = platform;
             existing.updatedAt = now;
         }

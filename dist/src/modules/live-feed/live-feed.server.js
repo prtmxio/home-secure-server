@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.attachLiveFeedServer = attachLiveFeedServer;
 exports.broadcastLiveFeedStatus = broadcastLiveFeedStatus;
 exports.sendLiveFeedSignalToViewers = sendLiveFeedSignalToViewers;
+exports.hasLiveFeedViewers = hasLiveFeedViewers;
 const ws_1 = require("ws");
 const api_error_1 = require("../../common/errors/api-error");
 const jwt_1 = require("../../common/utils/jwt");
@@ -68,6 +69,7 @@ async function authenticateViewer(url, config) {
 function registerViewer(socket, hubId, options) {
     clients.set(socket, { hubId, socket });
     const viewers = viewersByHub.get(hubId) || new Set();
+    const hadViewers = viewers.size > 0;
     viewers.add(socket);
     viewersByHub.set(hubId, viewers);
     sendJson(socket, {
@@ -77,11 +79,13 @@ function registerViewer(socket, hubId, options) {
         mode: "webrtc",
         status: options.isDeviceConnected?.(hubId) ? "live" : "waiting",
     });
-    options.sendToDevice?.(hubId, { type: "viewer-ready", hubId });
+    if (!hadViewers) {
+        options.sendToDevice?.(hubId, { type: "viewer-ready", hubId });
+    }
     socket.on("message", (raw) => {
         try {
             const message = JSON.parse(raw.toString());
-            if (message.type === "answer" || message.type === "ice-candidate" || message.type === "viewer-ready") {
+            if (message.type === "answer" || message.type === "ice-candidate") {
                 const sent = options.sendToDevice?.(hubId, { ...message, hubId }) ?? false;
                 if (!sent) {
                     sendJson(socket, { type: "status", hubId, status: "offline", at: new Date().toISOString() });
@@ -110,6 +114,16 @@ function broadcastLiveFeedStatus(hubId, status) {
 }
 function sendLiveFeedSignalToViewers(hubId, payload) {
     broadcastToViewers(hubId, payload);
+}
+function hasLiveFeedViewers(hubId) {
+    const viewers = viewersByHub.get(hubId);
+    if (!viewers)
+        return false;
+    for (const viewer of viewers) {
+        if (viewer.readyState === ws_1.WebSocket.OPEN)
+            return true;
+    }
+    return false;
 }
 function broadcastToViewers(hubId, payload) {
     const viewers = viewersByHub.get(hubId);

@@ -5,7 +5,7 @@ import { DoorLockService } from "../door-lock/door-lock.service";
 import { DoorLockCommandDto } from "../door-lock/door-lock.types";
 import { DeviceEventInput } from "../device/device.types";
 import { HubModel } from "../hubs/hub.model";
-import { broadcastLiveFeedStatus, sendLiveFeedSignalToViewers } from "../live-feed/live-feed.server";
+import { broadcastLiveFeedStatus, hasLiveFeedViewers, sendLiveFeedSignalToViewers } from "../live-feed/live-feed.server";
 
 interface HubSocket {
   hubId: string;
@@ -143,6 +143,10 @@ export function attachHubControlWebSocket(
           });
 
           ws.send(JSON.stringify({ type: "ready" }));
+          if (hasLiveFeedViewers(hubId)) {
+            ws.send(JSON.stringify({ type: "viewer-ready", hubId }));
+            console.info(`[HUB_WS] Re-sent viewer-ready to reconnected hub=${hubId} mac=${hubMacAddress}`);
+          }
           void doorLockService.getQueuedForHub(hubId).then((command) => {
             if (command && ws.readyState === WebSocket.OPEN) sendCommand(ws, command);
           });

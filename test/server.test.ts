@@ -548,12 +548,14 @@ test("webRTC live feed signaling uses the existing hub control WebSocket", async
   const { token, hubId, hubSecret } = await onboardHub("Door Viewer", "door-viewer@example.com", "AA:BB:CC:DD:EE:01");
 
   const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:01", hubSecret);
-  const viewerWs = new WebSocket(
-    `${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`,
-  );
+  let viewerWs: WebSocket | undefined;
 
   try {
     await waitWsOpen(hubWs);
+    const viewerReadyForHubPromise = nextWsJsonOfType(hubWs, "viewer-ready");
+    viewerWs = new WebSocket(
+      `${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`,
+    );
     await waitWsOpen(viewerWs);
 
     const viewerReady = await nextWsJsonOfType(viewerWs, "ready");
@@ -561,8 +563,7 @@ test("webRTC live feed signaling uses the existing hub control WebSocket", async
     assert.equal(viewerReady.mode, "webrtc");
     assert.equal(viewerReady.status, "live");
 
-    viewerWs.send(JSON.stringify({ type: "viewer-ready" }));
-    const viewerReadyForHub = await nextWsJsonOfType(hubWs, "viewer-ready");
+    const viewerReadyForHub = await viewerReadyForHubPromise;
     assert.equal(viewerReadyForHub.hubId, hubId);
 
     hubWs.send(JSON.stringify({
@@ -583,7 +584,37 @@ test("webRTC live feed signaling uses the existing hub control WebSocket", async
     assert.equal(answer.hubId, hubId);
     assert.deepEqual(answer.sdp, { type: "answer", sdp: "mobile-answer-sdp" });
   } finally {
-    viewerWs.close();
+    viewerWs?.close();
+    hubWs.close();
+  }
+});
+
+test("webRTC live feed signaling sends one viewer-ready while a viewer is active", async () => {
+  const { token, hubId, hubSecret } = await onboardHub("Single Viewer", "single-viewer@example.com", "AA:BB:CC:DD:EE:02");
+
+  const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:02", hubSecret);
+  let firstViewerWs: WebSocket | undefined;
+  let secondViewerWs: WebSocket | undefined;
+
+  try {
+    await waitWsOpen(hubWs);
+    const firstViewerReadyForHubPromise = nextWsJsonOfType(hubWs, "viewer-ready");
+    firstViewerWs = new WebSocket(
+      `${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`,
+    );
+    await waitWsOpen(firstViewerWs);
+    assert.equal((await nextWsJsonOfType(firstViewerWs, "ready")).status, "live");
+    assert.equal((await firstViewerReadyForHubPromise).hubId, hubId);
+
+    secondViewerWs = new WebSocket(
+      `${httpServerUrl.replace("http://", "ws://")}/ws/live-feed?role=viewer&mode=webrtc&token=${token}&hubId=${hubId}`,
+    );
+    await waitWsOpen(secondViewerWs);
+    assert.equal((await nextWsJsonOfType(secondViewerWs, "ready")).status, "live");
+    await assertNoWsJsonOfType(hubWs, "viewer-ready");
+  } finally {
+    secondViewerWs?.close();
+    firstViewerWs?.close();
     hubWs.close();
   }
 });
@@ -684,6 +715,41 @@ async function nextWsJsonOfType(ws: WebSocket, type: string): Promise<Record<str
     }
   }
   throw new Error(`Timed out waiting for WebSocket message type ${type}`);
+}
+
+async function assertNoWsJsonOfType(ws: WebSocket, type: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, 250);
+
+    const onMessage = (data: RawData) => {
+      const message = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (message.type === type) {
+        cleanup();
+        reject(new Error(`Unexpected WebSocket message type ${type}`));
+      }
+    };
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => {
+      cleanup();
+      resolve();
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      ws.off("message", onMessage);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+
+    ws.on("message", onMessage);
+    ws.once("error", onError);
+    ws.once("close", onClose);
+  });
 }
 
 async function waitWsOpen(ws: WebSocket): Promise<void> {
