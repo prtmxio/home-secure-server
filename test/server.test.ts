@@ -54,6 +54,7 @@ test.before(async () => {
     testConfig,
     realtimeServices.doorLockService,
     realtimeServices.ingestHubEvent,
+    realtimeServices.cameraRelay,
   );
   attachLiveFeedServer(httpServer, testConfig, {
     isDeviceConnected: isHubControlConnected,
@@ -317,6 +318,41 @@ test("hub can upload camera frames and user can mint a short-lived stream token"
     .set("Content-Type", "image/jpeg")
     .send(frame);
   assert.equal(deniedUpload.status, 401);
+});
+
+test("hub binary WebSocket JPEG frames are relayed to MJPEG viewers", async () => {
+  const { token, homeId, hubId, hubSecret } = await onboardHub("MJPEG User", "mjpeg@example.com", "AA:BB:CC:DD:EE:12");
+  const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:12", hubSecret);
+  let streamRequest: http.ClientRequest | undefined;
+
+  try {
+    await waitWsOpen(hubWs);
+
+    const tokenResponse = await request(app)
+      .post(`/api/homes/${homeId}/camera/stream-token`)
+      .set("Authorization", `Bearer ${token}`);
+    assert.equal(tokenResponse.status, 201);
+
+    const viewerReadyPromise = nextWsJsonOfType(hubWs, "viewer-ready");
+    const frame = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0xff, 0xd9]);
+    const frameInStreamPromise = waitForHttpStreamToContain(
+      `${httpServerUrl}${tokenResponse.body.streamPath}`,
+      frame,
+      (req) => {
+        streamRequest = req;
+      },
+    );
+
+    const viewerReady = await viewerReadyPromise;
+    assert.equal(viewerReady.type, "viewer-ready");
+    assert.equal(viewerReady.hubId, hubId);
+
+    hubWs.send(frame, { binary: true });
+    await frameInStreamPromise;
+  } finally {
+    streamRequest?.destroy();
+    hubWs.close();
+  }
 });
 
 test("user lock command is pushed to the hub over WebSocket and ACK updates status", async () => {
@@ -749,6 +785,53 @@ async function assertNoWsJsonOfType(ws: WebSocket, type: string): Promise<void> 
     ws.on("message", onMessage);
     ws.once("error", onError);
     ws.once("close", onClose);
+  });
+}
+
+async function waitForHttpStreamToContain(
+  url: string,
+  expected: Buffer,
+  onRequest: (request: http.ClientRequest) => void,
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Timed out waiting for MJPEG frame"));
+    }, 5000);
+    const chunks: Buffer[] = [];
+
+    const request = http.get(url, (response) => {
+      if (response.statusCode !== 200) {
+        cleanup();
+        reject(new Error(`MJPEG stream failed with status ${response.statusCode}`));
+        response.resume();
+        return;
+      }
+      response.on("data", (chunk: Buffer) => {
+        chunks.push(chunk);
+        if (Buffer.concat(chunks).includes(expected)) {
+          cleanup();
+          resolve();
+        }
+      });
+      response.once("error", onError);
+      response.once("end", () => {
+        cleanup();
+        reject(new Error("MJPEG stream ended before frame arrived"));
+      });
+    });
+
+    const onError = (error: Error) => {
+      cleanup();
+      reject(error);
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      request.off("error", onError);
+    };
+
+    onRequest(request);
+    request.once("error", onError);
   });
 }
 

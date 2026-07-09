@@ -21,6 +21,7 @@ async function bootstrap(): Promise<void> {
     env,
     realtimeServices.doorLockService,
     realtimeServices.ingestHubEvent,
+    realtimeServices.cameraRelay,
   );
   attachLiveFeedServer(server, env, {
     isDeviceConnected: isHubControlConnected,
