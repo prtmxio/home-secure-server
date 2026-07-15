@@ -4,12 +4,15 @@ exports.isHubControlConnected = isHubControlConnected;
 exports.sendLiveFeedSignalToHub = sendLiveFeedSignalToHub;
 exports.sendHubControlMessage = sendHubControlMessage;
 exports.sendCameraStreamCommandForHome = sendCameraStreamCommandForHome;
+exports.sendMjpegViewerSignalForHome = sendMjpegViewerSignalForHome;
 exports.attachHubControlWebSocket = attachHubControlWebSocket;
 const ws_1 = require("ws");
 const hub_model_1 = require("../hubs/hub.model");
 const live_feed_server_1 = require("../live-feed/live-feed.server");
 const CONTROL_WS_PATH = "/api/device/hubs/control/ws";
+const MAX_MJPEG_FRAME_BYTES = 300 * 1024;
 const socketsByHubId = new Map();
+const cameraFrameLogCounts = new Map();
 function isHubControlConnected(hubId) {
     return socketsByHubId.get(hubId)?.socket.readyState === ws_1.WebSocket.OPEN;
 }
@@ -54,7 +57,16 @@ async function sendCameraStreamCommandForHome(homeId, action, streamSessionId = 
     }
     return true;
 }
-function attachHubControlWebSocket(server, config, doorLockService, ingestHubEvent) {
+async function sendMjpegViewerSignalForHome(homeId, action) {
+    const hub = await hub_model_1.HubModel.findOne({ home: homeId });
+    if (!hub) {
+        console.warn(`[HUB_WS] MJPEG viewer signal not sent action=${action} home=${homeId} reason=hub_not_found`);
+        return false;
+    }
+    const type = action === "start" ? "viewer-ready" : "viewer-gone";
+    return sendHubControlMessage(hub.id, { type, hubId: hub.id }, `MJPEG ${type}`);
+}
+function attachHubControlWebSocket(server, config, doorLockService, ingestHubEvent, cameraRelay) {
     const wss = new ws_1.WebSocketServer({ noServer: true });
     doorLockService.onCommand((command) => {
         const hubSocket = socketsByHubId.get(command.hubId);
@@ -89,11 +101,11 @@ function attachHubControlWebSocket(server, config, doorLockService, ingestHubEve
                     console.warn(`[HUB_WS] Replacing existing control websocket hub=${hubId} mac=${hubMacAddress}`);
                     existingSocket.socket.close(4000, "Replaced by a new control connection");
                 }
-                socketsByHubId.set(hubId, { hubId, hubMacAddress, hubSecret, socket: ws });
+                socketsByHubId.set(hubId, { hubId, homeId: hub.home.toString(), hubMacAddress, hubSecret, socket: ws });
                 console.info(`[HUB_WS] Control websocket connected hub=${hubId} mac=${hubMacAddress}`);
                 (0, live_feed_server_1.broadcastLiveFeedStatus)(hubId, "live");
-                ws.on("message", (data) => {
-                    void handleHubMessage(doorLockService, hubId, hubMacAddress, hubSecret, ws, data, ingestHubEvent);
+                ws.on("message", (data, isBinary) => {
+                    void handleHubMessage(doorLockService, hubId, hub.home.toString(), hubMacAddress, hubSecret, ws, data, isBinary, ingestHubEvent, cameraRelay);
                 });
                 ws.on("close", (code, reason) => {
                     console.info(`[HUB_WS] Control websocket closed hub=${hubId} mac=${hubMacAddress} code=${code} reason=${reason.toString()}`);
@@ -130,7 +142,11 @@ function sendCommand(socket, command) {
         durationMs: command.durationMs,
     }));
 }
-async function handleHubMessage(doorLockService, hubId, hubMacAddress, hubSecret, socket, data, ingestHubEvent) {
+async function handleHubMessage(doorLockService, hubId, homeId, hubMacAddress, hubSecret, socket, data, isBinary, ingestHubEvent, cameraRelay) {
+    if (isBinary) {
+        handleMjpegFrame(hubId, homeId, hubMacAddress, data, cameraRelay);
+        return;
+    }
     let message;
     try {
         message = JSON.parse(data.toString());
@@ -202,6 +218,41 @@ async function handleHubMessage(doorLockService, hubId, hubMacAddress, hubSecret
     catch (error) {
         socket.send(JSON.stringify({ type: "error", error: error instanceof Error ? error.message : "ACK failed" }));
     }
+}
+function handleMjpegFrame(hubId, homeId, hubMacAddress, data, cameraRelay) {
+    if (!cameraRelay)
+        return;
+    const frame = rawDataToBuffer(data);
+    if (frame.length === 0)
+        return;
+    if (frame.length > MAX_MJPEG_FRAME_BYTES) {
+        console.warn(`[CAMERA] Dropped WS frame hub=${hubId} mac=${hubMacAddress} reason=too_large bytes=${frame.length}`);
+        return;
+    }
+    if (!isJpegFrame(frame)) {
+        console.warn(`[CAMERA] Dropped WS frame hub=${hubId} mac=${hubMacAddress} reason=not_jpeg bytes=${frame.length}`);
+        return;
+    }
+    cameraRelay.publishFrame(homeId, frame);
+    const frameCount = (cameraFrameLogCounts.get(hubId) || 0) + 1;
+    cameraFrameLogCounts.set(hubId, frameCount);
+    if (frameCount === 1 || frameCount % 30 === 0) {
+        console.info(`[CAMERA] Accepted WS MJPEG frame hub=${hubId} mac=${hubMacAddress} home=${homeId} bytes=${frame.length} count=${frameCount}`);
+    }
+}
+function rawDataToBuffer(data) {
+    if (Buffer.isBuffer(data))
+        return data;
+    if (data instanceof ArrayBuffer)
+        return Buffer.from(data);
+    return Buffer.concat(data);
+}
+function isJpegFrame(frame) {
+    return frame.length >= 4 &&
+        frame[0] === 0xff &&
+        frame[1] === 0xd8 &&
+        frame[frame.length - 2] === 0xff &&
+        frame[frame.length - 1] === 0xd9;
 }
 function isHubEventMessage(message) {
     const type = String(message.type || "");

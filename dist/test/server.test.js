@@ -47,7 +47,7 @@ node_test_1.default.before(async () => {
     realtimeServices = (0, app_1.createRealtimeServices)();
     app = (0, app_1.createApp)(testConfig, realtimeServices);
     httpServer = http_1.default.createServer(app);
-    (0, hub_control_ws_1.attachHubControlWebSocket)(httpServer, testConfig, realtimeServices.doorLockService, realtimeServices.ingestHubEvent);
+    (0, hub_control_ws_1.attachHubControlWebSocket)(httpServer, testConfig, realtimeServices.doorLockService, realtimeServices.ingestHubEvent, realtimeServices.cameraRelay);
     (0, live_feed_server_1.attachLiveFeedServer)(httpServer, testConfig, {
         isDeviceConnected: hub_control_ws_1.isHubControlConnected,
         sendToDevice: hub_control_ws_1.sendLiveFeedSignalToHub,
@@ -280,6 +280,32 @@ node_test_1.default.afterEach(async () => {
         .set("Content-Type", "image/jpeg")
         .send(frame);
     strict_1.default.equal(deniedUpload.status, 401);
+});
+(0, node_test_1.default)("hub binary WebSocket JPEG frames are relayed to MJPEG viewers", async () => {
+    const { token, homeId, hubId, hubSecret } = await onboardHub("MJPEG User", "mjpeg@example.com", "AA:BB:CC:DD:EE:12");
+    const hubWs = openHubControlSocket("AA:BB:CC:DD:EE:12", hubSecret);
+    let streamRequest;
+    try {
+        await waitWsOpen(hubWs);
+        const tokenResponse = await (0, supertest_1.default)(app)
+            .post(`/api/homes/${homeId}/camera/stream-token`)
+            .set("Authorization", `Bearer ${token}`);
+        strict_1.default.equal(tokenResponse.status, 201);
+        const viewerReadyPromise = nextWsJsonOfType(hubWs, "viewer-ready");
+        const frame = Buffer.from([0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0xff, 0xd9]);
+        const frameInStreamPromise = waitForHttpStreamToContain(`${httpServerUrl}${tokenResponse.body.streamPath}`, frame, (req) => {
+            streamRequest = req;
+        });
+        const viewerReady = await viewerReadyPromise;
+        strict_1.default.equal(viewerReady.type, "viewer-ready");
+        strict_1.default.equal(viewerReady.hubId, hubId);
+        hubWs.send(frame, { binary: true });
+        await frameInStreamPromise;
+    }
+    finally {
+        streamRequest?.destroy();
+        hubWs.close();
+    }
 });
 (0, node_test_1.default)("user lock command is pushed to the hub over WebSocket and ACK updates status", async () => {
     const { token, homeId, hubSecret } = await onboardHub("Lock User", "lock@example.com", "AA:BB:CC:DD:EE:20");
@@ -643,6 +669,45 @@ async function assertNoWsJsonOfType(ws, type) {
         ws.on("message", onMessage);
         ws.once("error", onError);
         ws.once("close", onClose);
+    });
+}
+async function waitForHttpStreamToContain(url, expected, onRequest) {
+    await new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
+            cleanup();
+            reject(new Error("Timed out waiting for MJPEG frame"));
+        }, 5000);
+        const chunks = [];
+        const request = http_1.default.get(url, (response) => {
+            if (response.statusCode !== 200) {
+                cleanup();
+                reject(new Error(`MJPEG stream failed with status ${response.statusCode}`));
+                response.resume();
+                return;
+            }
+            response.on("data", (chunk) => {
+                chunks.push(chunk);
+                if (Buffer.concat(chunks).includes(expected)) {
+                    cleanup();
+                    resolve();
+                }
+            });
+            response.once("error", onError);
+            response.once("end", () => {
+                cleanup();
+                reject(new Error("MJPEG stream ended before frame arrived"));
+            });
+        });
+        const onError = (error) => {
+            cleanup();
+            reject(error);
+        };
+        const cleanup = () => {
+            clearTimeout(timeout);
+            request.off("error", onError);
+        };
+        onRequest(request);
+        request.once("error", onError);
     });
 }
 async function waitWsOpen(ws) {

@@ -619,6 +619,12 @@ test("webRTC live feed signaling uses the existing hub control WebSocket", async
     const answer = await nextWsJsonOfType(hubWs, "answer");
     assert.equal(answer.hubId, hubId);
     assert.deepEqual(answer.sdp, { type: "answer", sdp: "mobile-answer-sdp" });
+
+    const viewerGonePromise = nextWsJsonOfType(hubWs, "viewer-gone");
+    viewerWs.close();
+    const viewerGone = await viewerGonePromise;
+    assert.equal(viewerGone.hubId, hubId);
+    viewerWs = undefined;
   } finally {
     viewerWs?.close();
     hubWs.close();

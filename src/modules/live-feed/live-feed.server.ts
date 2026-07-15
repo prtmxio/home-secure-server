@@ -139,6 +139,7 @@ function registerViewer(socket: WebSocket, hubId: string, options: LiveFeedServe
     viewers.delete(socket);
     if (viewers.size === 0) {
       viewersByHub.delete(hubId);
+      options.sendToDevice?.(hubId, { type: "viewer-gone", hubId });
     }
   });
 }

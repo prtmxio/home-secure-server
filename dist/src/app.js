@@ -28,8 +28,8 @@ const push_notification_service_1 = require("./modules/push-notifications/push-n
 function createRealtimeServices() {
     return {
         cameraRelay: new camera_relay_1.CameraRelay({
-            onFirstViewer: (homeId, streamSessionId) => (0, hub_control_ws_1.sendCameraStreamCommandForHome)(homeId, "start", streamSessionId),
-            onLastViewer: (homeId, streamSessionId) => (0, hub_control_ws_1.sendCameraStreamCommandForHome)(homeId, "stop", streamSessionId),
+            onFirstViewer: (homeId) => (0, hub_control_ws_1.sendMjpegViewerSignalForHome)(homeId, "start"),
+            onLastViewer: (homeId) => (0, hub_control_ws_1.sendMjpegViewerSignalForHome)(homeId, "stop"),
         }),
         doorLockService: new door_lock_service_1.DoorLockService(),
     };
